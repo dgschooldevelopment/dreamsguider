@@ -1,0 +1,22 @@
+{
+  "name": "dreamsguider",
+  "version": "1.0.0",
+  "description": "DreamsGuider - Education Course Platform",
+  "private": true,
+  "scripts": {
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "seed": "cd backend && npm run db:seed",
+    "build": "cd backend && npm run build && cd ../frontend && npm run build"
+  },
+  "keywords": [
+    "education",
+    "courses",
+    "dreamsguider",
+    "lms",
+    "react",
+    "express"
+  ],
+  "author": "DreamsGuider Team",
+  "license": "ISC"
+}

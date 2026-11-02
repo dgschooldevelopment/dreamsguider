@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+*.log
+backend/dev.db
+backend/dev.db-journal
+backend/uploads/videos/*
+!backend/uploads/videos/.gitkeep
+backend/uploads/thumbnails/*
+!backend/uploads/thumbnails/.gitkeep
+backend/uploads/assignments/*
+!backend/uploads/assignments/.gitkeep
