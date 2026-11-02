@@ -68,7 +68,7 @@
 cd backend
 npm run dev
 ```
-> सर्व्हर `http://localhost:5000` वर सुरू होईल.
+> सर्व्हर `http://127.0.0.1:5050` वर सुरू होईल.
 
 #### २. Frontend सुरू करा:
 ```powershell

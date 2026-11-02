@@ -18,7 +18,6 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Clear token if invalid/expired
       if (window.location.pathname !== '/login') {
         localStorage.removeItem('dg_token');
         localStorage.removeItem('dg_user');
@@ -27,5 +26,11 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+export const getMediaUrl = (url?: string | null): string => {
+  if (!url) return '';
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  return url; // Proxied by Vite or direct relative path
+};
 
 export default api;

@@ -202,9 +202,6 @@ export const CoursePlayer: React.FC = () => {
   // Helper to parse video source
   const getVideoSrc = (url?: string | null) => {
     if (!url) return null;
-    if (url.startsWith('/uploads')) {
-      return `http://localhost:5000${url}`;
-    }
     return url;
   };
 

@@ -318,10 +318,7 @@ export const AdminCurriculum: React.FC = () => {
                           {topic.videoUrl && (
                             <button
                               onClick={() => {
-                                const url = topic.videoUrl?.startsWith('/uploads')
-                                  ? `http://localhost:5000${topic.videoUrl}`
-                                  : topic.videoUrl;
-                                setPreviewVideoUrl(url || null);
+                                setPreviewVideoUrl(topic.videoUrl || null);
                               }}
                               className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold"
                             >

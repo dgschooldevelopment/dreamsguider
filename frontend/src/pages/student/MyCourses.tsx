@@ -47,9 +47,8 @@ export const MyCourses: React.FC = () => {
                 <div className="relative aspect-video w-full bg-slate-100 overflow-hidden">
                   <img
                     src={
-                      item.course.thumbnail?.startsWith('/uploads')
-                        ? `http://localhost:5000${item.course.thumbnail}`
-                        : item.course.thumbnail || 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=800&q=80'
+                      item.course.thumbnail ||
+                      'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=800&q=80'
                     }
                     alt={item.course.title}
                     className="w-full h-full object-cover"

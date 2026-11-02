@@ -292,7 +292,7 @@ export const AdminAssignments: React.FC = () => {
 
                     {sub.fileUrl && (
                       <a
-                        href={`http://localhost:5000${sub.fileUrl}`}
+                        href={sub.fileUrl || '#'}
                         target="_blank"
                         rel="noreferrer"
                         className="inline-flex items-center space-x-1 text-xs text-indigo-600 font-semibold hover:underline"
