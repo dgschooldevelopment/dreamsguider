@@ -39,9 +39,12 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     fetchNotifications();
 
     // Connect to WebSocket server
-    const socketServerUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-      ? 'http://127.0.0.1:5050'
-      : '/';
+    const socketServerUrl =
+      import.meta.env.VITE_SOCKET_URL ||
+      import.meta.env.VITE_API_URL ||
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        ? 'http://127.0.0.1:5050'
+        : '/');
     const socket: Socket = io(socketServerUrl, {
       transports: ['websocket', 'polling'],
     });

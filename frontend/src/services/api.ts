@@ -1,7 +1,9 @@
 import axios from 'axios';
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE_URL ? `${API_BASE_URL}/api` : '/api',
 });
 
 // Attach JWT token to all requests
@@ -30,7 +32,8 @@ api.interceptors.response.use(
 export const getMediaUrl = (url?: string | null): string => {
   if (!url) return '';
   if (url.startsWith('http://') || url.startsWith('https://')) return url;
-  return url; // Proxied by Vite or direct relative path
+  const baseUrl = import.meta.env.VITE_API_URL || '';
+  return baseUrl ? `${baseUrl}${url}` : url;
 };
 
 export default api;
