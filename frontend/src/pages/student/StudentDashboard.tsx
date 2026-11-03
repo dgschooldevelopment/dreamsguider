@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { courseService } from '../../services/courseService';
 import { getMediaUrl, DEFAULT_COURSE_THUMBNAIL } from '../../services/api';
+import { offlineCache } from '../../services/offlineCache';
 import { useAuth } from '../../context/AuthContext';
 import { MyCourseItem } from '../../types';
 import {
@@ -12,6 +13,7 @@ import {
   ArrowRight,
   Sparkles,
   TrendingUp,
+  WifiOff,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -19,17 +21,41 @@ export const StudentDashboard: React.FC = () => {
   const { user } = useAuth();
   const [enrolledCourses, setEnrolledCourses] = useState<MyCourseItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
     loadMyCourses();
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
   }, []);
 
   const loadMyCourses = async () => {
+    // 1. Instant load from offline cache if available
+    const cached = offlineCache.getEnrolledCourses();
+    if (cached && cached.length > 0) {
+      setEnrolledCourses(cached);
+      setLoading(false);
+    }
+
+    // 2. Fetch fresh from API if network is available
     try {
       const data = await courseService.getMyCourses();
       setEnrolledCourses(data);
+      offlineCache.saveEnrolledCourses(data);
     } catch (err) {
-      console.error('Failed to load enrolled courses', err);
+      console.warn('Network fetch failed, keeping cached courses', err);
+      if (!cached) {
+        setEnrolledCourses([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -46,6 +72,24 @@ export const StudentDashboard: React.FC = () => {
 
   return (
     <div className="space-y-8">
+      {/* Offline Status Alert if disconnected */}
+      {!isOnline && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 flex items-center justify-between text-amber-800">
+          <div className="flex items-center space-x-3">
+            <WifiOff className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <p className="text-xs font-bold text-amber-900">Offline Mode Active</p>
+              <p className="text-[11px] text-amber-700">
+                You are currently offline. Cached courses and lectures remain accessible.
+              </p>
+            </div>
+          </div>
+          <span className="text-[10px] font-bold px-2.5 py-1 bg-amber-500/20 text-amber-900 rounded-lg">
+            Offline Cache
+          </span>
+        </div>
+      )}
+
       {/* Welcome Banner */}
       <div className="bg-gradient-to-r from-indigo-900 via-indigo-800 to-slate-900 rounded-3xl p-6 sm:p-8 text-white relative overflow-hidden shadow-xl">
         <div className="relative z-10 max-w-2xl">

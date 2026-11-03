@@ -511,13 +511,21 @@ export const AdminCurriculum: React.FC = () => {
                   </div>
 
                   {videoMode === 'url' ? (
-                    <input
-                      type="url"
-                      value={videoUrl}
-                      onChange={(e) => setVideoUrl(e.target.value)}
-                      placeholder="https://commondatastorage.googleapis.com/... or YouTube/MP4 URL"
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
+                    <div className="space-y-1.5">
+                      <input
+                        type="url"
+                        value={videoUrl}
+                        onChange={(e) => setVideoUrl(e.target.value)}
+                        placeholder="https://res.cloudinary.com/... or YouTube/MP4 URL"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <p className="text-[11px] text-indigo-700 bg-indigo-50/80 p-2 rounded-lg border border-indigo-100 flex items-start space-x-1.5">
+                        <span className="font-bold">⚡ Cloudinary Support:</span>
+                        <span>
+                          Cloudinary video URL टाकल्यास सिस्टीम आपोआप <code>q_auto,f_auto</code> chunk streaming चालू करते, ज्यामुळे इंटरनेट स्लो असले तरी व्हिडिओ अडकणार नाही.
+                        </span>
+                      </p>
+                    </div>
                   ) : (
                     <div className="border-2 border-dashed border-slate-200 rounded-2xl p-4 text-center hover:border-indigo-400 transition-colors">
                       <Upload className="w-6 h-6 text-indigo-500 mx-auto mb-1" />

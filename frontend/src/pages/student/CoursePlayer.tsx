@@ -3,6 +3,7 @@ import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { courseService } from '../../services/courseService';
 import { curriculumService } from '../../services/curriculumService';
 import { assignmentService } from '../../services/assignmentService';
+import { offlineCache } from '../../services/offlineCache';
 import { Course, Module, Topic, Assignment } from '../../types';
 import {
   PlayCircle,
@@ -21,6 +22,14 @@ import {
   Check,
   Send,
   Award,
+  Wifi,
+  WifiOff,
+  RotateCcw,
+  RotateCw,
+  Gauge,
+  Zap,
+  RefreshCw,
+  AlertCircle,
 } from 'lucide-react';
 
 export const CoursePlayer: React.FC = () => {
@@ -33,6 +42,17 @@ export const CoursePlayer: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'overview' | 'assignments'>('overview');
   const [loading, setLoading] = useState(true);
 
+  // Network & Offline States
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [pendingSyncCount, setPendingSyncCount] = useState(offlineCache.getPendingProgressCount());
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+
+  // Video Streaming & Buffer Management States
+  const [bufferedSeconds, setBufferedSeconds] = useState<number>(0);
+  const [bufferedPercent, setBufferedPercent] = useState<number>(0);
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
+  const [isBuffering, setIsBuffering] = useState<boolean>(false);
+
   // Accordion state: map moduleId -> boolean
   const [openModules, setOpenModules] = useState<Record<string, boolean>>({});
 
@@ -44,6 +64,34 @@ export const CoursePlayer: React.FC = () => {
 
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  // Monitor network connectivity & auto-sync progress when reconnected
+  useEffect(() => {
+    const handleOnline = async () => {
+      setIsOnline(true);
+      const synced = await offlineCache.syncProgressQueue();
+      setPendingSyncCount(0);
+      if (synced > 0) {
+        setSyncMessage(`Internet restored: ${synced} progress update(s) synced with server!`);
+        setTimeout(() => setSyncMessage(null), 5000);
+      }
+      if (slug) {
+        loadCourseData();
+      }
+    };
+
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [slug]);
+
   useEffect(() => {
     if (slug) {
       loadCourseData();
@@ -52,9 +100,32 @@ export const CoursePlayer: React.FC = () => {
 
   const loadCourseData = async () => {
     if (!slug) return;
+
+    // 1. Instant load from offline cache
+    const cached = offlineCache.getCourse(slug);
+    if (cached) {
+      setCourse(cached);
+      const initialOpen: Record<string, boolean> = {};
+      cached.modules?.forEach((m) => {
+        initialOpen[m.id] = true;
+      });
+      setOpenModules(initialOpen);
+
+      if (!activeTopic && cached.modules && cached.modules.length > 0) {
+        const allT = cached.modules.flatMap((m) => m.topics);
+        const found = requestedTopicId
+          ? allT.find((t) => t.id === requestedTopicId)
+          : allT.find((t) => !t.isCompleted) || allT[0];
+        setActiveTopic(found || null);
+      }
+      setLoading(false);
+    }
+
+    // 2. Fetch fresh data from API
     try {
       const courseData = await courseService.getCourseDetail(slug);
       setCourse(courseData);
+      offlineCache.saveCourse(slug, courseData);
 
       // Open all modules by default
       const initialOpen: Record<string, boolean> = {};
@@ -73,18 +144,22 @@ export const CoursePlayer: React.FC = () => {
       }
 
       if (!topicToSelect && courseData.modules && courseData.modules.length > 0) {
-        // Pick first uncompleted topic or first topic
         const allTopics = courseData.modules.flatMap((m) => m.topics);
         topicToSelect = allTopics.find((t) => !t.isCompleted) || allTopics[0] || null;
       }
 
-      setActiveTopic(topicToSelect);
+      if (!activeTopic || requestedTopicId) {
+        setActiveTopic(topicToSelect);
+      }
 
       // Load assignments for this course
       const assignData = await assignmentService.getStudentAssignments(courseData.id);
       setAssignments(assignData);
     } catch (err) {
-      console.error('Failed to load course player', err);
+      console.warn('Network course load failed; using cached offline data', err);
+      if (!cached) {
+        setCourse(null);
+      }
     } finally {
       setLoading(false);
     }
@@ -102,40 +177,111 @@ export const CoursePlayer: React.FC = () => {
   const handleSelectTopic = (topic: Topic) => {
     if (topic.isLocked) return;
     setActiveTopic(topic);
+    setBufferedSeconds(0);
+    setBufferedPercent(0);
     setSearchParams({ topicId: topic.id });
   };
 
   const handleToggleCompletion = async (topicId: string, currentStatus: boolean) => {
-    try {
-      await curriculumService.updateProgress(topicId, { isCompleted: !currentStatus });
+    const newStatus = !currentStatus;
 
-      // Update in local state
-      setCourse((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          modules: prev.modules?.map((m) => ({
-            ...m,
-            topics: m.topics.map((t) => (t.id === topicId ? { ...t, isCompleted: !currentStatus } : t)),
-          })),
-        };
-      });
-
-      if (activeTopic?.id === topicId) {
-        setActiveTopic((prev) => (prev ? { ...prev, isCompleted: !currentStatus } : prev));
+    // Optimistically update local course state
+    setCourse((prev) => {
+      if (!prev) return prev;
+      const updated = {
+        ...prev,
+        modules: prev.modules?.map((m) => ({
+          ...m,
+          topics: m.topics.map((t) => (t.id === topicId ? { ...t, isCompleted: newStatus } : t)),
+        })),
+      };
+      if (slug) {
+        offlineCache.saveCourse(slug, updated);
       }
-    } catch (err) {
-      console.error('Failed to update completion status', err);
+      return updated;
+    });
+
+    if (activeTopic?.id === topicId) {
+      setActiveTopic((prev) => (prev ? { ...prev, isCompleted: newStatus } : prev));
+    }
+
+    // If offline or network fails, queue to local storage
+    if (!navigator.onLine) {
+      offlineCache.queueProgress(topicId, newStatus);
+      setPendingSyncCount(offlineCache.getPendingProgressCount());
+    } else {
+      try {
+        await curriculumService.updateProgress(topicId, { isCompleted: newStatus });
+      } catch (err) {
+        console.warn('Online sync failed, queuing for offline retry', err);
+        offlineCache.queueProgress(topicId, newStatus);
+        setPendingSyncCount(offlineCache.getPendingProgressCount());
+      }
+    }
+  };
+
+  const handleManualSync = async () => {
+    const count = await offlineCache.syncProgressQueue();
+    setPendingSyncCount(0);
+    setSyncMessage(`Synced ${count} items successfully!`);
+    setTimeout(() => setSyncMessage(null), 4000);
+  };
+
+  // Video Streaming, Buffering & Resuming handlers
+  const handleVideoLoadedMetadata = () => {
+    if (activeTopic && videoRef.current) {
+      const savedTime = offlineCache.getVideoTime(activeTopic.id);
+      if (savedTime > 0 && savedTime < (videoRef.current.duration || 0) - 5) {
+        videoRef.current.currentTime = savedTime;
+      }
+      videoRef.current.playbackRate = playbackSpeed;
+    }
+  };
+
+  const handleVideoTimeUpdate = () => {
+    if (activeTopic && videoRef.current) {
+      offlineCache.saveVideoTime(activeTopic.id, videoRef.current.currentTime);
+    }
+  };
+
+  const handleVideoProgress = () => {
+    const video = videoRef.current;
+    if (!video || !video.duration) return;
+    const buffered = video.buffered;
+    if (buffered.length > 0) {
+      for (let i = 0; i < buffered.length; i++) {
+        if (buffered.start(i) <= video.currentTime && video.currentTime <= buffered.end(i)) {
+          const percent = Math.min(100, Math.round((buffered.end(i) / video.duration) * 100));
+          const ahead = Math.max(0, Math.round(buffered.end(i) - video.currentTime));
+          setBufferedPercent(percent);
+          setBufferedSeconds(ahead);
+          break;
+        }
+      }
+    }
+  };
+
+  const skipTime = (seconds: number) => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = Math.max(
+        0,
+        Math.min(videoRef.current.duration || 0, videoRef.current.currentTime + seconds)
+      );
+    }
+  };
+
+  const changePlaybackSpeed = (speed: number) => {
+    setPlaybackSpeed(speed);
+    if (videoRef.current) {
+      videoRef.current.playbackRate = speed;
     }
   };
 
   const handleNextLesson = async () => {
     if (!activeTopic) return;
-    // Mark current as completed
     if (!activeTopic.isCompleted) {
       await handleToggleCompletion(activeTopic.id, false);
     }
-    // Advance to next
     if (currentTopicIndex < allTopics.length - 1) {
       const nextTopic = allTopics[currentTopicIndex + 1];
       handleSelectTopic(nextTopic);
@@ -224,6 +370,54 @@ export const CoursePlayer: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Offline Mode Alert Banner */}
+      {!isOnline && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-900 shadow-sm animate-pulse">
+          <div className="flex items-center space-x-3">
+            <WifiOff className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <p className="text-xs font-bold">Offline Learning Active • ऑफलाइन मोड सुरू आहे</p>
+              <p className="text-[11px] text-amber-800">
+                तुम्ही ऑफलाइन आहात. आधी लोड झालेले लेक्चर्स, नोट्स व बफर झालेला व्हिडिओ चालू राहील. इंटरनेट आल्यावर प्रोग्रेस आपोआप सेव्ह होईल.
+              </p>
+            </div>
+          </div>
+          {pendingSyncCount > 0 && (
+            <span className="text-[11px] font-bold px-3 py-1 bg-amber-200/80 text-amber-900 rounded-lg shrink-0 self-start sm:self-auto">
+              {pendingSyncCount} update(s) queued
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Sync Success Message Banner */}
+      {syncMessage && (
+        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-3.5 flex items-center justify-between text-emerald-900 shadow-sm">
+          <div className="flex items-center space-x-2">
+            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+            <p className="text-xs font-bold">{syncMessage}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Pending Sync Manual Trigger if Online */}
+      {isOnline && pendingSyncCount > 0 && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-3.5 flex items-center justify-between text-indigo-900 shadow-sm">
+          <div className="flex items-center space-x-2">
+            <RefreshCw className="w-4 h-4 text-indigo-600 shrink-0" />
+            <span className="text-xs font-bold">
+              {pendingSyncCount} offline progress updates ready to sync
+            </span>
+          </div>
+          <button
+            onClick={handleManualSync}
+            className="text-[11px] font-bold px-3.5 py-1.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors shadow-sm"
+          >
+            Sync Now
+          </button>
+        </div>
+      )}
+
       {/* Top Breadcrumb & Progress Bar Header */}
       <div className="bg-white rounded-3xl p-5 border border-slate-200/90 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -263,7 +457,7 @@ export const CoursePlayer: React.FC = () => {
       {/* Main Two-Column Classroom Player Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column: Video Player & Tabs (Span 2) */}
-        <div className="lg:col-span-2 space-y-6">
+        <div className="lg:col-span-2 space-y-4">
           {/* Video Container */}
           <div className="bg-black rounded-3xl overflow-hidden aspect-video shadow-2xl relative border border-slate-800 flex items-center justify-center">
             {activeTopic?.isLocked ? (
@@ -291,15 +485,92 @@ export const CoursePlayer: React.FC = () => {
                 allowFullScreen
               />
             ) : (
-              <video
-                ref={videoRef}
-                src={getVideoSrc(activeTopic.videoUrl) || ''}
-                controls
-                autoPlay
-                className="w-full h-full object-contain"
-              />
+              <>
+                <video
+                  ref={videoRef}
+                  src={offlineCache.optimizeVideoUrl(activeTopic.videoUrl)}
+                  controls
+                  autoPlay
+                  preload="auto"
+                  playsInline
+                  onLoadedMetadata={handleVideoLoadedMetadata}
+                  onTimeUpdate={handleVideoTimeUpdate}
+                  onProgress={handleVideoProgress}
+                  onWaiting={() => setIsBuffering(true)}
+                  onPlaying={() => setIsBuffering(false)}
+                  className="w-full h-full object-contain"
+                />
+                {isBuffering && (
+                  <div className="absolute top-4 right-4 bg-black/75 backdrop-blur-md px-3 py-1.5 rounded-full text-[11px] text-white flex items-center space-x-2 pointer-events-none border border-white/10 shadow-lg">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+                    <span>Buffering stream...</span>
+                  </div>
+                )}
+              </>
             )}
           </div>
+
+          {/* Smart Video Streaming & Buffer Bar for direct/Cloudinary videos */}
+          {!isYouTubeUrl(activeTopic?.videoUrl) && activeTopic?.videoUrl && (
+            <div className="bg-slate-900 text-white rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-sm border border-slate-800">
+              <div className="flex items-center space-x-3">
+                {/* 10s Skip Buttons */}
+                <div className="flex items-center space-x-1.5">
+                  <button
+                    onClick={() => skipTime(-10)}
+                    title="Rewind 10 seconds"
+                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors flex items-center space-x-1 text-[11px] font-semibold"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>-10s</span>
+                  </button>
+                  <button
+                    onClick={() => skipTime(10)}
+                    title="Forward 10 seconds"
+                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors flex items-center space-x-1 text-[11px] font-semibold"
+                  >
+                    <span>+10s</span>
+                    <RotateCw className="w-3 h-3" />
+                  </button>
+                </div>
+
+                {/* Speed Controls */}
+                <div className="flex items-center space-x-1 bg-slate-800/90 px-2 py-1 rounded-xl border border-slate-700/60">
+                  <Gauge className="w-3 h-3 text-slate-400 mr-1" />
+                  {[1, 1.25, 1.5, 2].map((spd) => (
+                    <button
+                      key={spd}
+                      onClick={() => changePlaybackSpeed(spd)}
+                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded transition-colors ${
+                        playbackSpeed === spd
+                          ? 'bg-indigo-600 text-white'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {spd}x
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Buffer Health Indicator */}
+              <div className="flex items-center space-x-3 text-xs">
+                <div className="flex items-center space-x-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-[11px] text-slate-300 font-medium">
+                    Buffer: {bufferedSeconds > 0 ? `${bufferedSeconds}s ahead` : 'Ready'}
+                  </span>
+                </div>
+                <div className="w-24 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-500 rounded-full transition-all duration-300"
+                    style={{ width: `${bufferedPercent}%` }}
+                  />
+                </div>
+                <span className="text-[10px] text-slate-400 font-bold">{bufferedPercent}% cached</span>
+              </div>
+            </div>
+          )}
 
           {/* Player Action Bar */}
           <div className="bg-white rounded-3xl p-5 border border-slate-200/90 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
