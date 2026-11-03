@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { courseService } from '../../services/courseService';
+import { getMediaUrl, DEFAULT_COURSE_THUMBNAIL } from '../../services/api';
 import { Course } from '../../types';
 import {
   Plus,
@@ -159,11 +160,12 @@ export const AdminCourses: React.FC = () => {
               {/* Thumbnail */}
               <div className="relative aspect-video w-full bg-slate-100 overflow-hidden">
                 <img
-                  src={
-                    course.thumbnail ||
-                    'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=800&q=80'
-                  }
+                  src={getMediaUrl(course.thumbnail)}
                   alt={course.title}
+                  onError={(e) => {
+                    e.currentTarget.onerror = null;
+                    e.currentTarget.src = DEFAULT_COURSE_THUMBNAIL;
+                  }}
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                 />
                 <div className="absolute top-3 left-3 flex gap-1.5">
@@ -358,6 +360,23 @@ export const AdminCourses: React.FC = () => {
                   <p className="text-[11px] text-emerald-600 font-semibold mt-1">
                     Selected file: {thumbnailFile.name}
                   </p>
+                )}
+
+                {(thumbnailFile || (thumbnailUrl && thumbnailUrl.trim())) && (
+                  <div className="mt-2.5 relative w-full h-28 rounded-xl overflow-hidden bg-slate-100 border border-slate-200">
+                    <img
+                      src={thumbnailFile ? URL.createObjectURL(thumbnailFile) : getMediaUrl(thumbnailUrl)}
+                      alt="Thumbnail Preview"
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        e.currentTarget.onerror = null;
+                        e.currentTarget.src = DEFAULT_COURSE_THUMBNAIL;
+                      }}
+                    />
+                    <span className="absolute bottom-1 right-2 text-[10px] bg-slate-900/80 text-white px-2 py-0.5 rounded font-medium">
+                      Live Preview
+                    </span>
+                  </div>
                 )}
               </div>
 

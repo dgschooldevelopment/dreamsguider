@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { courseService } from '../../services/courseService';
+import { getMediaUrl, DEFAULT_COURSE_THUMBNAIL } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { MyCourseItem } from '../../types';
 import {
@@ -171,11 +172,12 @@ export const StudentDashboard: React.FC = () => {
                     {/* Thumbnail */}
                     <div className="relative aspect-video w-full bg-slate-100 overflow-hidden">
                       <img
-                        src={
-                          course.thumbnail ||
-                          'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=800&q=80'
-                        }
+                        src={getMediaUrl(course.thumbnail)}
                         alt={course.title}
+                        onError={(e) => {
+                          e.currentTarget.onerror = null;
+                          e.currentTarget.src = DEFAULT_COURSE_THUMBNAIL;
+                        }}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                       />
                       <div className="absolute top-3 left-3 flex gap-1.5">

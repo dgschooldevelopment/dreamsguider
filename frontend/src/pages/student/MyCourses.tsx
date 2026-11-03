@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { courseService } from '../../services/courseService';
+import { getMediaUrl, DEFAULT_COURSE_THUMBNAIL } from '../../services/api';
 import { MyCourseItem } from '../../types';
 import { BookOpen, PlayCircle, Clock, Award, CheckCircle2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -46,11 +47,12 @@ export const MyCourses: React.FC = () => {
               <div>
                 <div className="relative aspect-video w-full bg-slate-100 overflow-hidden">
                   <img
-                    src={
-                      item.course.thumbnail ||
-                      'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=800&q=80'
-                    }
+                    src={getMediaUrl(item.course.thumbnail)}
                     alt={item.course.title}
+                    onError={(e) => {
+                      e.currentTarget.onerror = null;
+                      e.currentTarget.src = DEFAULT_COURSE_THUMBNAIL;
+                    }}
                     className="w-full h-full object-cover"
                   />
                   <div className="absolute top-3 left-3">
