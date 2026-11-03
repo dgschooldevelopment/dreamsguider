@@ -30,6 +30,8 @@ import {
   Zap,
   RefreshCw,
   AlertCircle,
+  Maximize,
+  Minimize,
 } from 'lucide-react';
 
 export const CoursePlayer: React.FC = () => {
@@ -53,6 +55,7 @@ export const CoursePlayer: React.FC = () => {
   const [watchProgressPercent, setWatchProgressPercent] = useState<number>(0);
   const [doubleTapFeedback, setDoubleTapFeedback] = useState<'left' | 'right' | null>(null);
   const [completionCelebration, setCompletionCelebration] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
 
   // Accordion state: map moduleId -> boolean
   const [openModules, setOpenModules] = useState<Record<string, boolean>>({});
@@ -64,7 +67,7 @@ export const CoursePlayer: React.FC = () => {
   const [submittingAssignmentId, setSubmittingAssignmentId] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const clickTimeoutRef = useRef<any>(null);
+  const videoContainerRef = useRef<HTMLDivElement>(null);
   const lastLeftTapRef = useRef<number>(0);
   const lastRightTapRef = useRef<number>(0);
 
@@ -283,6 +286,71 @@ export const CoursePlayer: React.FC = () => {
     }
   };
 
+  // Listen for fullscreen state changes across all mobile & desktop browsers
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isFs = Boolean(
+        document.fullscreenElement ||
+          (document as any).webkitFullscreenElement ||
+          (document as any).mozFullScreenElement ||
+          (document as any).msFullscreenElement
+      );
+      setIsFullscreen(isFs);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+    };
+  }, []);
+
+  const toggleFullScreen = () => {
+    const container = videoContainerRef.current;
+    const video = videoRef.current;
+    if (!container && !video) return;
+
+    const isCurrentlyFs = Boolean(
+      document.fullscreenElement ||
+        (document as any).webkitFullscreenElement ||
+        (document as any).mozFullScreenElement ||
+        (document as any).msFullscreenElement
+    );
+
+    if (isCurrentlyFs) {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      } else if ((document as any).webkitExitFullscreen) {
+        (document as any).webkitExitFullscreen();
+      } else if ((document as any).mozCancelFullScreen) {
+        (document as any).mozCancelFullScreen();
+      } else if ((document as any).msExitFullscreen) {
+        (document as any).msExitFullscreen();
+      }
+    } else {
+      // 1. iOS Safari native video fullscreen requirement
+      if (video && (video as any).webkitEnterFullscreen) {
+        (video as any).webkitEnterFullscreen();
+      } else if (container && container.requestFullscreen) {
+        container.requestFullscreen().catch(() => {
+          if (video && video.requestFullscreen) {
+            video.requestFullscreen().catch(() => {});
+          }
+        });
+      } else if (container && (container as any).webkitRequestFullscreen) {
+        (container as any).webkitRequestFullscreen();
+      } else if (video && video.requestFullscreen) {
+        video.requestFullscreen().catch(() => {});
+      }
+    }
+  };
+
   // Double-tap and double-click skip handling (-10s / +10s)
   const triggerSkip = (seconds: number, side: 'left' | 'right') => {
     skipTime(seconds);
@@ -292,27 +360,23 @@ export const CoursePlayer: React.FC = () => {
     }, 650);
   };
 
-  // Handles desktop single-click (toggle play/pause) vs double-click (skip 10s)
-  const handleSideClick = (side: 'left' | 'right', seconds: number) => {
-    if (clickTimeoutRef.current) {
-      clearTimeout(clickTimeoutRef.current);
-      clickTimeoutRef.current = null;
-      triggerSkip(seconds, side);
-    } else {
-      clickTimeoutRef.current = setTimeout(() => {
-        clickTimeoutRef.current = null;
-        if (videoRef.current) {
-          if (videoRef.current.paused) videoRef.current.play().catch(() => {});
-          else videoRef.current.pause();
-        }
-      }, 240);
-    }
+  // Desktop double-click
+  const handleLeftDoubleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    triggerSkip(-10, 'left');
   };
 
-  // Touch handlers for mobile double-tap
-  const handleLeftTouch = () => {
+  const handleRightDoubleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    triggerSkip(10, 'right');
+  };
+
+  // Touch handlers for mobile: double-tap detects fast taps within 320ms
+  // Single tap NEVER pauses video, allowing smooth fullscreen and controls
+  const handleLeftTouch = (e: React.TouchEvent) => {
     const now = Date.now();
-    if (now - lastLeftTapRef.current < 350) {
+    if (now - lastLeftTapRef.current < 320) {
+      e.preventDefault();
       triggerSkip(-10, 'left');
       lastLeftTapRef.current = 0;
     } else {
@@ -320,9 +384,10 @@ export const CoursePlayer: React.FC = () => {
     }
   };
 
-  const handleRightTouch = () => {
+  const handleRightTouch = (e: React.TouchEvent) => {
     const now = Date.now();
-    if (now - lastRightTapRef.current < 350) {
+    if (now - lastRightTapRef.current < 320) {
+      e.preventDefault();
       triggerSkip(10, 'right');
       lastRightTapRef.current = 0;
     } else {
@@ -533,6 +598,7 @@ export const CoursePlayer: React.FC = () => {
         <div className="lg:col-span-2 space-y-4">
           {/* Video Container with Double-Tap Gestures & Download Protection */}
           <div
+            ref={videoContainerRef}
             className="bg-black rounded-3xl overflow-hidden aspect-video shadow-2xl relative border border-slate-800 flex items-center justify-center select-none"
             onContextMenu={(e) => e.preventDefault()}
           >
@@ -581,11 +647,28 @@ export const CoursePlayer: React.FC = () => {
                   className="w-full h-full object-contain pointer-events-auto select-none"
                 />
 
-                {/* Invisible Double-Tap / Double-Click Gesture Touch Zones (Leaves bottom 56px open for video controls) */}
-                <div className="absolute inset-x-0 top-0 bottom-14 flex z-10 pointer-events-auto">
+                {/* Instant Mobile & Desktop Fullscreen Button on Top-Right of Video */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleFullScreen();
+                  }}
+                  title={isFullscreen ? 'Exit Full Screen' : 'Full Screen'}
+                  className="absolute top-3 right-3 z-30 p-2.5 rounded-xl bg-black/60 hover:bg-black/90 text-white backdrop-blur-md border border-white/20 transition-all shadow-lg active:scale-90 flex items-center space-x-1"
+                >
+                  {isFullscreen ? (
+                    <Minimize className="w-4 h-4 text-indigo-300" />
+                  ) : (
+                    <Maximize className="w-4 h-4 text-white" />
+                  )}
+                </button>
+
+                {/* Invisible Double-Tap / Double-Click Gesture Touch Zones (Covers top 60%, leaves bottom 40% open for native controls) */}
+                <div className="absolute inset-x-0 top-0 h-[60%] flex z-10 pointer-events-auto">
                   {/* Left 50% Zone: Double-Click / Double-Tap -> -10s */}
                   <div
-                    onClick={() => handleSideClick('left', -10)}
+                    onDoubleClick={handleLeftDoubleClick}
                     onTouchStart={handleLeftTouch}
                     className="w-1/2 h-full relative flex items-center justify-center cursor-pointer select-none"
                     title="Double-tap to rewind 10s"
@@ -600,7 +683,7 @@ export const CoursePlayer: React.FC = () => {
 
                   {/* Right 50% Zone: Double-Click / Double-Tap -> +10s */}
                   <div
-                    onClick={() => handleSideClick('right', 10)}
+                    onDoubleClick={handleRightDoubleClick}
                     onTouchStart={handleRightTouch}
                     className="w-1/2 h-full relative flex items-center justify-center cursor-pointer select-none"
                     title="Double-tap to forward 10s"
@@ -616,7 +699,7 @@ export const CoursePlayer: React.FC = () => {
 
                 {/* Buffering stream indicator */}
                 {isBuffering && (
-                  <div className="absolute top-4 right-4 bg-black/75 backdrop-blur-md px-3 py-1.5 rounded-full text-[11px] text-white flex items-center space-x-2 pointer-events-none border border-white/10 shadow-lg z-20">
+                  <div className="absolute top-4 left-4 bg-black/75 backdrop-blur-md px-3 py-1.5 rounded-full text-[11px] text-white flex items-center space-x-2 pointer-events-none border border-white/10 shadow-lg z-20">
                     <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-400" />
                     <span>Loading...</span>
                   </div>
@@ -625,7 +708,7 @@ export const CoursePlayer: React.FC = () => {
             )}
           </div>
 
-          {/* Clean Player Toolbar (Skip 10s & Speed controls - Buffer details completely removed) */}
+          {/* Clean Player Toolbar (Skip 10s, Speed controls & Fullscreen toggle) */}
           {!isYouTubeUrl(activeTopic?.videoUrl) && activeTopic?.videoUrl && (
             <div className="bg-slate-900 text-white rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-sm border border-slate-800">
               <div className="flex items-center space-x-3">
@@ -668,9 +751,28 @@ export const CoursePlayer: React.FC = () => {
                 </div>
               </div>
 
-              {/* Gesture Hint (Zero buffer stats shown) */}
-              <div className="text-[11px] text-slate-400 flex items-center space-x-1.5">
-                <span>💡 Double-tap video sides to skip 10s</span>
+              {/* Fullscreen Button & Gesture Tip */}
+              <div className="flex items-center space-x-3">
+                <span className="hidden sm:inline text-[11px] text-slate-400">
+                  💡 Double-tap video sides to skip 10s
+                </span>
+                <button
+                  type="button"
+                  onClick={toggleFullScreen}
+                  className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-xs font-bold transition-all shadow-sm flex items-center space-x-1.5"
+                >
+                  {isFullscreen ? (
+                    <>
+                      <Minimize className="w-3.5 h-3.5" />
+                      <span>Exit Full Screen</span>
+                    </>
+                  ) : (
+                    <>
+                      <Maximize className="w-3.5 h-3.5" />
+                      <span>Full Screen</span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           )}
