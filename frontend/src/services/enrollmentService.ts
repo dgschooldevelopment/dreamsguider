@@ -43,4 +43,25 @@ export const enrollmentService = {
     const res = await api.post('/auth/users/create', data);
     return res.data;
   },
+
+  // Admin: Update student data
+  updateStudent: async (
+    userId: string,
+    data: {
+      name?: string;
+      email?: string;
+      phone?: string;
+      password?: string;
+      role?: string;
+    }
+  ): Promise<any> => {
+    const res = await api.put(`/auth/users/${userId}`, data);
+    return res.data;
+  },
+
+  // Admin: Delete student permanently
+  deleteStudent: async (userId: string): Promise<any> => {
+    const res = await api.delete(`/auth/users/${userId}`);
+    return res.data;
+  },
 };

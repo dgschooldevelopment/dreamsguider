@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { enrollmentService } from '../../services/enrollmentService';
 import { courseService } from '../../services/courseService';
+import { useAuth } from '../../context/AuthContext';
 import { User, Course } from '../../types';
 import {
   Users,
@@ -17,13 +18,18 @@ import {
   Lock,
   Mail,
   User as UserIcon,
+  Edit,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 
 export const AdminUsers: React.FC = () => {
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [globalNotification, setGlobalNotification] = useState<string | null>(null);
 
   // Allocation Modal State
   const [isAllocateModalOpen, setIsAllocateModalOpen] = useState(false);
@@ -42,6 +48,23 @@ export const AdminUsers: React.FC = () => {
   const [addingStudent, setAddingStudent] = useState(false);
   const [studentSuccessMessage, setStudentSuccessMessage] = useState('');
   const [studentError, setStudentError] = useState('');
+
+  // Edit Student Modal State
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingUserId, setEditingUserId] = useState('');
+  const [editName, setEditName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editPassword, setEditPassword] = useState('');
+  const [editRole, setEditRole] = useState<'STUDENT' | 'ADMIN'>('STUDENT');
+  const [updatingStudent, setUpdatingStudent] = useState(false);
+  const [editError, setEditError] = useState('');
+  const [editSuccessMessage, setEditSuccessMessage] = useState('');
+
+  // Delete Student Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<User | null>(null);
+  const [deletingStudent, setDeletingStudent] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -150,6 +173,75 @@ export const AdminUsers: React.FC = () => {
     }
   };
 
+  const handleOpenEditModal = (targetUser: User) => {
+    setEditingUserId(targetUser.id);
+    setEditName(targetUser.name);
+    setEditEmail(targetUser.email);
+    setEditPhone(targetUser.phone || '');
+    setEditPassword('');
+    setEditRole((targetUser.role as 'STUDENT' | 'ADMIN') || 'STUDENT');
+    setEditError('');
+    setEditSuccessMessage('');
+    setIsEditModalOpen(true);
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingUserId) return;
+    setEditError('');
+    setUpdatingStudent(true);
+
+    try {
+      const result = await enrollmentService.updateStudent(editingUserId, {
+        name: editName.trim(),
+        email: editEmail.trim(),
+        phone: editPhone.trim() || undefined,
+        password: editPassword.trim() || undefined,
+        role: editRole,
+      });
+
+      setEditSuccessMessage(result.message || 'Student updated successfully!');
+      await loadData();
+
+      setTimeout(() => {
+        setIsEditModalOpen(false);
+        setEditSuccessMessage('');
+      }, 1200);
+    } catch (err: any) {
+      setEditError(err.response?.data?.message || 'Failed to update student.');
+    } finally {
+      setUpdatingStudent(false);
+    }
+  };
+
+  const handleOpenDeleteModal = (targetUser: User) => {
+    if (currentUser?.id === targetUser.id) {
+      alert('You cannot delete your own admin account.');
+      return;
+    }
+    setUserToDelete(targetUser);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!userToDelete) return;
+    setDeletingStudent(true);
+
+    try {
+      const result = await enrollmentService.deleteStudent(userToDelete.id);
+      setIsDeleteModalOpen(false);
+      const name = userToDelete.name;
+      setUserToDelete(null);
+      await loadData();
+      setGlobalNotification(result.message || `Student "${name}" deleted successfully.`);
+      setTimeout(() => setGlobalNotification(null), 4000);
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Failed to delete student.');
+    } finally {
+      setDeletingStudent(false);
+    }
+  };
+
   const filteredUsers = users.filter(
     (u) =>
       u.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -185,6 +277,22 @@ export const AdminUsers: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Global Toast Notification */}
+      {globalNotification && (
+        <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-800 text-xs font-bold flex items-center justify-between shadow-sm animate-in slide-in-from-top-2">
+          <div className="flex items-center space-x-2">
+            <CheckCircle className="w-4 h-4 text-emerald-600" />
+            <span>{globalNotification}</span>
+          </div>
+          <button
+            onClick={() => setGlobalNotification(null)}
+            className="text-emerald-700 hover:text-emerald-900 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Search and Filter bar */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200/90 shadow-sm flex items-center space-x-3">
@@ -286,13 +394,36 @@ export const AdminUsers: React.FC = () => {
                     </td>
 
                     <td className="py-4 px-6 text-right">
-                      <button
-                        onClick={() => handleOpenAllocateModal(user.id)}
-                        className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs transition-colors cursor-pointer"
-                      >
-                        <BookOpen className="w-3.5 h-3.5" />
-                        <span>Allocate Course</span>
-                      </button>
+                      <div className="flex items-center justify-end space-x-1.5">
+                        <button
+                          onClick={() => handleOpenAllocateModal(user.id)}
+                          className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs transition-colors cursor-pointer"
+                          title="Allocate courses to student"
+                        >
+                          <BookOpen className="w-3.5 h-3.5" />
+                          <span className="hidden xl:inline">Allocate</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleOpenEditModal(user)}
+                          className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
+                          title="Edit student details"
+                        >
+                          <Edit className="w-3.5 h-3.5 text-slate-600" />
+                          <span className="hidden xl:inline">Edit</span>
+                        </button>
+
+                        {currentUser?.id !== user.id && (
+                          <button
+                            onClick={() => handleOpenDeleteModal(user)}
+                            className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs transition-colors cursor-pointer"
+                            title="Delete student permanently"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span className="hidden xl:inline">Delete</span>
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -544,6 +675,209 @@ export const AdminUsers: React.FC = () => {
                 </div>
               </form>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal 3: Edit Student Data */}
+      {isEditModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 relative my-8">
+            <button
+              onClick={() => setIsEditModalOpen(false)}
+              className="absolute top-5 right-5 text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center space-x-2.5">
+              <div className="p-2.5 bg-indigo-50 rounded-xl text-indigo-600">
+                <Edit className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">Edit Student Profile</h2>
+                <p className="text-xs text-slate-500">Update name, contact info, role or password</p>
+              </div>
+            </div>
+
+            {editSuccessMessage ? (
+              <div className="mt-6 p-6 text-center animate-in zoom-in-95">
+                <CheckCircle className="w-12 h-12 text-emerald-600 mx-auto mb-2" />
+                <h3 className="font-bold text-base text-slate-900">{editSuccessMessage}</h3>
+                <p className="text-xs text-slate-500 mt-1">Student details have been saved successfully.</p>
+              </div>
+            ) : (
+              <form onSubmit={handleEditSubmit} className="mt-5 space-y-3.5">
+                {editError && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs font-semibold">
+                    {editError}
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Student Full Name *
+                  </label>
+                  <div className="relative">
+                    <UserIcon className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                    <input
+                      type="text"
+                      required
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      placeholder="e.g. Ramesh Kadam"
+                      className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Email Address *
+                  </label>
+                  <div className="relative">
+                    <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                    <input
+                      type="email"
+                      required
+                      value={editEmail}
+                      onChange={(e) => setEditEmail(e.target.value)}
+                      placeholder="student@domain.com"
+                      className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Phone Number
+                    </label>
+                    <div className="relative">
+                      <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                      <input
+                        type="text"
+                        value={editPhone}
+                        onChange={(e) => setEditPhone(e.target.value)}
+                        placeholder="e.g. 9876543210"
+                        className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      User Role
+                    </label>
+                    <select
+                      value={editRole}
+                      disabled={currentUser?.id === editingUserId}
+                      onChange={(e) => setEditRole(e.target.value as 'STUDENT' | 'ADMIN')}
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-slate-100"
+                    >
+                      <option value="STUDENT">🎓 Student</option>
+                      <option value="ADMIN">🛡️ Admin</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Change Password (Optional)
+                  </label>
+                  <div className="relative">
+                    <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                    <input
+                      type="password"
+                      value={editPassword}
+                      onChange={(e) => setEditPassword(e.target.value)}
+                      placeholder="Leave blank to keep current password"
+                      className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Only enter a value if you wish to reset or change this student's password.
+                  </p>
+                </div>
+
+                <div className="pt-3 border-t border-slate-100 flex items-center justify-end space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditModalOpen(false)}
+                    className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={updatingStudent}
+                    className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md shadow-indigo-600/30 disabled:opacity-50 inline-flex items-center space-x-1 cursor-pointer"
+                  >
+                    <span>{updatingStudent ? 'Saving...' : 'Save Changes'}</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal 4: Delete Student Confirmation */}
+      {isDeleteModalOpen && userToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 relative">
+            <button
+              onClick={() => {
+                setIsDeleteModalOpen(false);
+                setUserToDelete(null);
+              }}
+              className="absolute top-5 right-5 text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center space-x-3 text-rose-600 mb-4">
+              <div className="p-3 bg-rose-50 rounded-2xl">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-extrabold text-lg text-slate-900">Delete Student Account?</h3>
+                <p className="text-xs text-slate-400">This action cannot be undone</p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-rose-50/70 border border-rose-100 text-xs text-rose-900 space-y-1 mb-5">
+              <p>
+                Are you sure you want to delete student <strong>{userToDelete.name}</strong> ({userToDelete.email})?
+              </p>
+              <p className="text-rose-700 font-medium">
+                ⚠️ All course progress, topic watch records, doubts, and assignment submissions for this student will be permanently deleted.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end space-x-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDeleteModalOpen(false);
+                  setUserToDelete(null);
+                }}
+                disabled={deletingStudent}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={deletingStudent}
+                className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-md shadow-rose-600/30 disabled:opacity-50 inline-flex items-center space-x-1 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{deletingStudent ? 'Deleting...' : 'Yes, Delete Student'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

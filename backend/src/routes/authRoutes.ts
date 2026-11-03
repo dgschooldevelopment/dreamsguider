@@ -5,6 +5,8 @@ import {
   getMe,
   getAllUsers,
   createStudentByAdmin,
+  updateStudentByAdmin,
+  deleteStudentByAdmin,
   sendOtp,
   verifyOtp,
 } from '../controllers/authController';
@@ -22,5 +24,7 @@ router.get('/me', authenticateToken, getMe);
 // Admin-only User management
 router.get('/users', authenticateToken, requireRole('ADMIN'), getAllUsers);
 router.post('/users/create', authenticateToken, requireRole('ADMIN'), createStudentByAdmin);
+router.put('/users/:userId', authenticateToken, requireRole('ADMIN'), updateStudentByAdmin);
+router.delete('/users/:userId', authenticateToken, requireRole('ADMIN'), deleteStudentByAdmin);
 
 export default router;

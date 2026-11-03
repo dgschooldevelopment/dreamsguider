@@ -270,6 +270,143 @@ export const createStudentByAdmin = async (req: AuthRequest, res: Response): Pro
   }
 };
 
+// Admin: Update student or user profile
+export const updateStudentByAdmin = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { userId } = req.params;
+    const { name, email, phone, password, role } = req.body;
+
+    if (!userId) {
+      res.status(400).json({ success: false, message: 'User ID is required.' });
+      return;
+    }
+
+    const existingUser = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!existingUser) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+
+    const updateData: any = {};
+
+    if (name && typeof name === 'string' && name.trim()) {
+      updateData.name = name.trim();
+    }
+
+    if (email && typeof email === 'string' && email.trim()) {
+      const cleanEmail = email.toLowerCase().trim();
+      if (cleanEmail !== existingUser.email) {
+        const emailExists = await prisma.user.findUnique({
+          where: { email: cleanEmail },
+        });
+        if (emailExists) {
+          res.status(409).json({ success: false, message: 'This email is already in use by another user.' });
+          return;
+        }
+        updateData.email = cleanEmail;
+      }
+    }
+
+    if (phone !== undefined) {
+      updateData.phone = phone ? phone.trim() : null;
+    }
+
+    if (password && typeof password === 'string' && password.trim().length > 0) {
+      updateData.password = await bcrypt.hash(password.trim(), 10);
+    }
+
+    if (role && (role === 'STUDENT' || role === 'ADMIN')) {
+      if (req.user?.userId === userId && role !== 'ADMIN') {
+        res.status(400).json({ success: false, message: 'You cannot remove your own administrator status.' });
+        return;
+      }
+      updateData.role = role;
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: updateData,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        phone: true,
+        avatar: true,
+        createdAt: true,
+        updatedAt: true,
+        enrollments: {
+          include: {
+            course: {
+              select: {
+                id: true,
+                title: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Student "${updated.name}" updated successfully.`,
+      data: updated,
+    });
+  } catch (error: any) {
+    console.error('Update student error:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to update student.' });
+  }
+};
+
+// Admin: Delete student or user
+export const deleteStudentByAdmin = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { userId } = req.params;
+
+    if (!userId) {
+      res.status(400).json({ success: false, message: 'User ID is required.' });
+      return;
+    }
+
+    // Safety: Admin cannot delete themselves!
+    if (req.user?.userId === userId) {
+      res.status(400).json({ success: false, message: 'You cannot delete your own account.' });
+      return;
+    }
+
+    const targetUser = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!targetUser) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+
+    // Clean up any pending OTP tokens for this user's email
+    await prisma.otpToken.deleteMany({
+      where: { email: targetUser.email },
+    });
+
+    // Delete user (cascade deletes enrollments, topicProgress, submissions, notifications, doubts)
+    await prisma.user.delete({
+      where: { id: userId },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Student "${targetUser.name}" has been permanently deleted.`,
+    });
+  } catch (error: any) {
+    console.error('Delete student error:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to delete student.' });
+  }
+};
+
 export const sendOtp = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email } = req.body;
