@@ -1,5 +1,5 @@
 import api from './api';
-import { Module, Topic } from '../types';
+import { Module, Topic, Doubt } from '../types';
 
 export const curriculumService = {
   // Modules (Chapters)
@@ -39,6 +39,22 @@ export const curriculumService = {
   // Student: Save progress
   updateProgress: async (topicId: string, data: { isCompleted?: boolean; lastWatchedSec?: number }): Promise<any> => {
     const res = await api.post(`/curriculum/topics/${topicId}/progress`, data);
+    return res.data.data;
+  },
+
+  // Timestamped Doubts / Q&A
+  getTopicDoubts: async (topicId: string): Promise<Doubt[]> => {
+    const res = await api.get(`/curriculum/topics/${topicId}/doubts`);
+    return res.data.data;
+  },
+
+  createDoubt: async (topicId: string, data: { timestampSec: number; question: string }): Promise<Doubt> => {
+    const res = await api.post(`/curriculum/topics/${topicId}/doubts`, data);
+    return res.data.data;
+  },
+
+  replyToDoubt: async (doubtId: string, data: { answer?: string; isResolved?: boolean }): Promise<Doubt> => {
+    const res = await api.put(`/curriculum/topics/doubts/${doubtId}/reply`, data);
     return res.data.data;
   },
 };

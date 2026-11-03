@@ -149,3 +149,21 @@ export interface AdminStats {
     createdAt: string;
   }[];
 }
+
+export interface Doubt {
+  id: string;
+  topicId: string;
+  userId: string;
+  timestampSec: number;
+  question: string;
+  answer?: string | null;
+  isResolved: boolean;
+  createdAt: string;
+  updatedAt: string;
+  user: {
+    id: string;
+    name: string;
+    role: string;
+    avatar?: string | null;
+  };
+}

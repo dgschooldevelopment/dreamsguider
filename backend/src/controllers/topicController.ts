@@ -256,3 +256,104 @@ export const updateTopicProgress = async (req: AuthRequest, res: Response): Prom
     res.status(500).json({ success: false, message: 'Failed to update progress' });
   }
 };
+
+// --- DOUBTS / Q&A AT SPECIFIC TIMESTAMPS ---
+
+export const createTopicDoubt = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Unauthorized' });
+      return;
+    }
+
+    const { topicId } = req.params;
+    const { timestampSec, question } = req.body;
+
+    if (!question || !question.trim()) {
+      res.status(400).json({ success: false, message: 'Question text is required' });
+      return;
+    }
+
+    const doubt = await prisma.doubt.create({
+      data: {
+        topicId,
+        userId: req.user.userId,
+        timestampSec: Number(timestampSec || 0),
+        question: question.trim(),
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            role: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+
+    res.status(201).json({ success: true, message: 'Doubt posted successfully', data: doubt });
+  } catch (error: any) {
+    console.error('Create doubt error:', error);
+    res.status(500).json({ success: false, message: 'Failed to post doubt' });
+  }
+};
+
+export const getTopicDoubts = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { topicId } = req.params;
+    const doubts = await prisma.doubt.findMany({
+      where: { topicId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            role: true,
+            avatar: true,
+          },
+        },
+      },
+      orderBy: [
+        { timestampSec: 'asc' },
+        { createdAt: 'desc' },
+      ],
+    });
+
+    res.status(200).json({ success: true, data: doubts });
+  } catch (error: any) {
+    console.error('Get doubts error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch doubts' });
+  }
+};
+
+export const replyToDoubt = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { doubtId } = req.params;
+    const { answer, isResolved } = req.body;
+
+    const doubt = await prisma.doubt.update({
+      where: { id: doubtId },
+      data: {
+        answer: answer !== undefined ? answer : undefined,
+        isResolved: isResolved !== undefined ? isResolved : true,
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            role: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+
+    res.status(200).json({ success: true, message: 'Doubt updated', data: doubt });
+  } catch (error: any) {
+    console.error('Reply doubt error:', error);
+    res.status(500).json({ success: false, message: 'Failed to reply to doubt' });
+  }
+};

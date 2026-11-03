@@ -4,7 +4,8 @@ import { courseService } from '../../services/courseService';
 import { curriculumService } from '../../services/curriculumService';
 import { assignmentService } from '../../services/assignmentService';
 import { offlineCache } from '../../services/offlineCache';
-import { Course, Module, Topic, Assignment } from '../../types';
+import { useAuth } from '../../context/AuthContext';
+import { Course, Module, Topic, Assignment, Doubt } from '../../types';
 import {
   PlayCircle,
   CheckCircle2,
@@ -30,18 +31,22 @@ import {
   Zap,
   RefreshCw,
   AlertCircle,
-  Maximize,
-  Minimize,
+  HelpCircle,
+  MessageSquare,
+  CornerDownRight,
+  MessageCircleQuestion,
+  Play,
 } from 'lucide-react';
 
 export const CoursePlayer: React.FC = () => {
+  const { user } = useAuth();
   const { slug } = useParams<{ slug: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTopicId = searchParams.get('topicId');
 
   const [course, setCourse] = useState<Course | null>(null);
   const [activeTopic, setActiveTopic] = useState<Topic | null>(null);
-  const [activeTab, setActiveTab] = useState<'overview' | 'assignments'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'doubts' | 'assignments'>('overview');
   const [loading, setLoading] = useState(true);
 
   // Network & Offline States
@@ -55,7 +60,14 @@ export const CoursePlayer: React.FC = () => {
   const [watchProgressPercent, setWatchProgressPercent] = useState<number>(0);
   const [doubleTapFeedback, setDoubleTapFeedback] = useState<'left' | 'right' | null>(null);
   const [completionCelebration, setCompletionCelebration] = useState<string | null>(null);
-  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+
+  // Doubts / Q&A at specific timestamps
+  const [doubts, setDoubts] = useState<Doubt[]>([]);
+  const [doubtText, setDoubtText] = useState<string>('');
+  const [doubtTimestampSec, setDoubtTimestampSec] = useState<number>(0);
+  const [submittingDoubt, setSubmittingDoubt] = useState<boolean>(false);
+  const [replyingDoubtId, setReplyingDoubtId] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState<string>('');
 
   // Accordion state: map moduleId -> boolean
   const [openModules, setOpenModules] = useState<Record<string, boolean>>({});
@@ -67,7 +79,6 @@ export const CoursePlayer: React.FC = () => {
   const [submittingAssignmentId, setSubmittingAssignmentId] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const videoContainerRef = useRef<HTMLDivElement>(null);
   const lastLeftTapRef = useRef<number>(0);
   const lastRightTapRef = useRef<number>(0);
 
@@ -277,77 +288,96 @@ export const CoursePlayer: React.FC = () => {
     }
   };
 
+  // Load Doubts whenever active topic changes
+  useEffect(() => {
+    if (activeTopic) {
+      loadTopicDoubts(activeTopic.id);
+    }
+  }, [activeTopic?.id]);
+
+  const loadTopicDoubts = async (topicId: string) => {
+    const cached = offlineCache.getTopicDoubts(topicId);
+    if (cached) {
+      setDoubts(cached);
+    }
+    try {
+      const list = await curriculumService.getTopicDoubts(topicId);
+      setDoubts(list);
+      offlineCache.saveTopicDoubts(topicId, list);
+    } catch (err) {
+      console.warn('Failed to load topic doubts:', err);
+    }
+  };
+
+  const handleCreateDoubt = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeTopic || !doubtText.trim()) return;
+
+    setSubmittingDoubt(true);
+    try {
+      const created = await curriculumService.createDoubt(activeTopic.id, {
+        timestampSec: doubtTimestampSec,
+        question: doubtText.trim(),
+      });
+
+      const updated = [created, ...doubts];
+      setDoubts(updated);
+      offlineCache.saveTopicDoubts(activeTopic.id, updated);
+      setDoubtText('');
+    } catch (err) {
+      console.error('Failed to post doubt', err);
+      alert('Failed to post doubt. Please try again.');
+    } finally {
+      setSubmittingDoubt(false);
+    }
+  };
+
+  const handleReplyDoubt = async (doubtId: string) => {
+    if (!replyText.trim()) return;
+    try {
+      const updated = await curriculumService.replyToDoubt(doubtId, {
+        answer: replyText.trim(),
+        isResolved: true,
+      });
+      setDoubts((prev) => prev.map((d) => (d.id === doubtId ? updated : d)));
+      setReplyingDoubtId(null);
+      setReplyText('');
+    } catch (err) {
+      console.error('Failed to reply to doubt', err);
+      alert('Failed to post reply.');
+    }
+  };
+
+  const formatTimestamp = (totalSec: number) => {
+    const mins = Math.floor(totalSec / 60);
+    const secs = Math.floor(totalSec % 60);
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const seekToTimestamp = (sec: number) => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = sec;
+      videoRef.current.play().catch(() => {});
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const handleOpenAskDoubt = () => {
+    const currentSec = Math.floor(videoRef.current?.currentTime || 0);
+    setDoubtTimestampSec(currentSec);
+    setActiveTab('doubts');
+    if (videoRef.current && !videoRef.current.paused) {
+      videoRef.current.pause();
+    }
+  };
+
+  // Skip time forward or backward
   const skipTime = (seconds: number) => {
     if (videoRef.current) {
       videoRef.current.currentTime = Math.max(
         0,
         Math.min(videoRef.current.duration || 0, videoRef.current.currentTime + seconds)
       );
-    }
-  };
-
-  // Listen for fullscreen state changes across all mobile & desktop browsers
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      const isFs = Boolean(
-        document.fullscreenElement ||
-          (document as any).webkitFullscreenElement ||
-          (document as any).mozFullScreenElement ||
-          (document as any).msFullscreenElement
-      );
-      setIsFullscreen(isFs);
-    };
-
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
-    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
-    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
-
-    return () => {
-      document.removeEventListener('fullscreenchange', handleFullscreenChange);
-      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
-      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
-      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
-    };
-  }, []);
-
-  const toggleFullScreen = () => {
-    const container = videoContainerRef.current;
-    const video = videoRef.current;
-    if (!container && !video) return;
-
-    const isCurrentlyFs = Boolean(
-      document.fullscreenElement ||
-        (document as any).webkitFullscreenElement ||
-        (document as any).mozFullScreenElement ||
-        (document as any).msFullscreenElement
-    );
-
-    if (isCurrentlyFs) {
-      if (document.exitFullscreen) {
-        document.exitFullscreen().catch(() => {});
-      } else if ((document as any).webkitExitFullscreen) {
-        (document as any).webkitExitFullscreen();
-      } else if ((document as any).mozCancelFullScreen) {
-        (document as any).mozCancelFullScreen();
-      } else if ((document as any).msExitFullscreen) {
-        (document as any).msExitFullscreen();
-      }
-    } else {
-      // 1. iOS Safari native video fullscreen requirement
-      if (video && (video as any).webkitEnterFullscreen) {
-        (video as any).webkitEnterFullscreen();
-      } else if (container && container.requestFullscreen) {
-        container.requestFullscreen().catch(() => {
-          if (video && video.requestFullscreen) {
-            video.requestFullscreen().catch(() => {});
-          }
-        });
-      } else if (container && (container as any).webkitRequestFullscreen) {
-        (container as any).webkitRequestFullscreen();
-      } else if (video && video.requestFullscreen) {
-        video.requestFullscreen().catch(() => {});
-      }
     }
   };
 
@@ -360,38 +390,46 @@ export const CoursePlayer: React.FC = () => {
     }, 650);
   };
 
-  // Desktop double-click
-  const handleLeftDoubleClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    triggerSkip(-10, 'left');
-  };
-
-  const handleRightDoubleClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    triggerSkip(10, 'right');
-  };
-
-  // Touch handlers for mobile: double-tap detects fast taps within 320ms
-  // Single tap NEVER pauses video, allowing smooth fullscreen and controls
-  const handleLeftTouch = (e: React.TouchEvent) => {
-    const now = Date.now();
-    if (now - lastLeftTapRef.current < 320) {
-      e.preventDefault();
+  // Desktop double-click directly on <video>
+  const handleVideoDoubleClick = (e: React.MouseEvent<HTMLVideoElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    if (clickX < rect.width / 2) {
       triggerSkip(-10, 'left');
-      lastLeftTapRef.current = 0;
     } else {
-      lastLeftTapRef.current = now;
+      triggerSkip(10, 'right');
     }
   };
 
-  const handleRightTouch = (e: React.TouchEvent) => {
+  // Mobile double-tap directly on <video>
+  // Bottom 45px is where the native controls bar (play/timeline/native fullscreen button) sits.
+  // If tapped in the bottom 45px, we return immediately so native fullscreen & controls work 100% natively!
+  const handleVideoTouchStart = (e: React.TouchEvent<HTMLVideoElement>) => {
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    const rect = e.currentTarget.getBoundingClientRect();
+    const touchY = touch.clientY - rect.top;
+
+    if (touchY > rect.height - 45) return;
+
+    const touchX = touch.clientX - rect.left;
     const now = Date.now();
-    if (now - lastRightTapRef.current < 320) {
-      e.preventDefault();
-      triggerSkip(10, 'right');
-      lastRightTapRef.current = 0;
+    const side = touchX < rect.width / 2 ? 'left' : 'right';
+
+    if (side === 'left') {
+      if (now - lastLeftTapRef.current < 320) {
+        triggerSkip(-10, 'left');
+        lastLeftTapRef.current = 0;
+      } else {
+        lastLeftTapRef.current = now;
+      }
     } else {
-      lastRightTapRef.current = now;
+      if (now - lastRightTapRef.current < 320) {
+        triggerSkip(10, 'right');
+        lastRightTapRef.current = 0;
+      } else {
+        lastRightTapRef.current = now;
+      }
     }
   };
 
@@ -596,9 +634,8 @@ export const CoursePlayer: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column: Video Player & Tabs (Span 2) */}
         <div className="lg:col-span-2 space-y-4">
-          {/* Video Container with Double-Tap Gestures & Download Protection */}
+          {/* Video Container with Native Controls & Download Protection */}
           <div
-            ref={videoContainerRef}
             className="bg-black rounded-3xl overflow-hidden aspect-video shadow-2xl relative border border-slate-800 flex items-center justify-center select-none"
             onContextMenu={(e) => e.preventDefault()}
           >
@@ -639,6 +676,8 @@ export const CoursePlayer: React.FC = () => {
                   autoPlay
                   preload="auto"
                   playsInline
+                  onDoubleClick={handleVideoDoubleClick}
+                  onTouchStart={handleVideoTouchStart}
                   onLoadedMetadata={handleVideoLoadedMetadata}
                   onTimeUpdate={handleVideoTimeUpdate}
                   onEnded={handleVideoEnded}
@@ -647,55 +686,21 @@ export const CoursePlayer: React.FC = () => {
                   className="w-full h-full object-contain pointer-events-auto select-none"
                 />
 
-                {/* Instant Mobile & Desktop Fullscreen Button on Top-Right of Video */}
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleFullScreen();
-                  }}
-                  title={isFullscreen ? 'Exit Full Screen' : 'Full Screen'}
-                  className="absolute top-3 right-3 z-30 p-2.5 rounded-xl bg-black/60 hover:bg-black/90 text-white backdrop-blur-md border border-white/20 transition-all shadow-lg active:scale-90 flex items-center space-x-1"
-                >
-                  {isFullscreen ? (
-                    <Minimize className="w-4 h-4 text-indigo-300" />
-                  ) : (
-                    <Maximize className="w-4 h-4 text-white" />
-                  )}
-                </button>
-
-                {/* Invisible Double-Tap / Double-Click Gesture Touch Zones (Covers top 60%, leaves bottom 40% open for native controls) */}
-                <div className="absolute inset-x-0 top-0 h-[60%] flex z-10 pointer-events-auto">
-                  {/* Left 50% Zone: Double-Click / Double-Tap -> -10s */}
-                  <div
-                    onDoubleClick={handleLeftDoubleClick}
-                    onTouchStart={handleLeftTouch}
-                    className="w-1/2 h-full relative flex items-center justify-center cursor-pointer select-none"
-                    title="Double-tap to rewind 10s"
-                  >
-                    {doubleTapFeedback === 'left' && (
-                      <div className="flex flex-col items-center justify-center w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-black/75 backdrop-blur-md text-white border border-white/20 shadow-2xl animate-pulse pointer-events-none">
-                        <RotateCcw className="w-7 h-7 sm:w-8 sm:h-8 text-white" />
-                        <span className="text-xs font-black mt-1 tracking-wider">-10s</span>
-                      </div>
-                    )}
+                {/* Left double-tap ripple feedback (pointer-events-none so it NEVER blocks controls or touch) */}
+                {doubleTapFeedback === 'left' && (
+                  <div className="absolute left-6 top-1/2 -translate-y-1/2 flex flex-col items-center justify-center w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-black/75 backdrop-blur-md text-white border border-white/20 shadow-2xl animate-pulse pointer-events-none z-20">
+                    <RotateCcw className="w-7 h-7 sm:w-8 sm:h-8 text-white" />
+                    <span className="text-xs font-black mt-1 tracking-wider">-10s</span>
                   </div>
+                )}
 
-                  {/* Right 50% Zone: Double-Click / Double-Tap -> +10s */}
-                  <div
-                    onDoubleClick={handleRightDoubleClick}
-                    onTouchStart={handleRightTouch}
-                    className="w-1/2 h-full relative flex items-center justify-center cursor-pointer select-none"
-                    title="Double-tap to forward 10s"
-                  >
-                    {doubleTapFeedback === 'right' && (
-                      <div className="flex flex-col items-center justify-center w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-black/75 backdrop-blur-md text-white border border-white/20 shadow-2xl animate-pulse pointer-events-none">
-                        <RotateCw className="w-7 h-7 sm:w-8 sm:h-8 text-white" />
-                        <span className="text-xs font-black mt-1 tracking-wider">+10s</span>
-                      </div>
-                    )}
+                {/* Right double-tap ripple feedback (pointer-events-none so it NEVER blocks controls or touch) */}
+                {doubleTapFeedback === 'right' && (
+                  <div className="absolute right-6 top-1/2 -translate-y-1/2 flex flex-col items-center justify-center w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-black/75 backdrop-blur-md text-white border border-white/20 shadow-2xl animate-pulse pointer-events-none z-20">
+                    <RotateCw className="w-7 h-7 sm:w-8 sm:h-8 text-white" />
+                    <span className="text-xs font-black mt-1 tracking-wider">+10s</span>
                   </div>
-                </div>
+                )}
 
                 {/* Buffering stream indicator */}
                 {isBuffering && (
@@ -708,24 +713,24 @@ export const CoursePlayer: React.FC = () => {
             )}
           </div>
 
-          {/* Clean Player Toolbar (Skip 10s, Speed controls & Fullscreen toggle) */}
+          {/* Clean Responsive Video Toolbar: Skip 10s, Speed, and Live Timestamp Doubt */}
           {!isYouTubeUrl(activeTopic?.videoUrl) && activeTopic?.videoUrl && (
-            <div className="bg-slate-900 text-white rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-sm border border-slate-800">
-              <div className="flex items-center space-x-3">
+            <div className="bg-slate-900 text-white rounded-2xl p-2.5 sm:px-4 sm:py-3 flex flex-wrap items-center justify-between gap-2.5 shadow-sm border border-slate-800">
+              <div className="flex items-center space-x-2 sm:space-x-3">
                 {/* 10s Skip Buttons */}
-                <div className="flex items-center space-x-1.5">
+                <div className="flex items-center space-x-1 sm:space-x-1.5">
                   <button
-                    onClick={() => skipTime(-10)}
+                    onClick={() => triggerSkip(-10, 'left')}
                     title="Rewind 10 seconds"
-                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors flex items-center space-x-1 text-[11px] font-semibold"
+                    className="p-1.5 sm:px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 hover:text-white transition-all flex items-center space-x-1 text-[11px] font-semibold"
                   >
                     <RotateCcw className="w-3 h-3" />
                     <span>-10s</span>
                   </button>
                   <button
-                    onClick={() => skipTime(10)}
+                    onClick={() => triggerSkip(10, 'right')}
                     title="Forward 10 seconds"
-                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors flex items-center space-x-1 text-[11px] font-semibold"
+                    className="p-1.5 sm:px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 hover:text-white transition-all flex items-center space-x-1 text-[11px] font-semibold"
                   >
                     <span>+10s</span>
                     <RotateCw className="w-3 h-3" />
@@ -733,8 +738,8 @@ export const CoursePlayer: React.FC = () => {
                 </div>
 
                 {/* Speed Controls */}
-                <div className="flex items-center space-x-1 bg-slate-800/90 px-2 py-1 rounded-xl border border-slate-700/60">
-                  <Gauge className="w-3 h-3 text-slate-400 mr-1" />
+                <div className="flex items-center space-x-1 bg-slate-800/90 px-1.5 sm:px-2 py-1 rounded-xl border border-slate-700/60">
+                  <Gauge className="w-3 h-3 text-slate-400 mr-0.5 sm:mr-1" />
                   {[1, 1.25, 1.5, 2].map((spd) => (
                     <button
                       key={spd}
@@ -751,39 +756,31 @@ export const CoursePlayer: React.FC = () => {
                 </div>
               </div>
 
-              {/* Fullscreen Button & Gesture Tip */}
-              <div className="flex items-center space-x-3">
-                <span className="hidden sm:inline text-[11px] text-slate-400">
-                  💡 Double-tap video sides to skip 10s
-                </span>
+              {/* Live Timestamp "Ask Doubt" Quick-Action Button */}
+              <div className="flex items-center space-x-2">
                 <button
                   type="button"
-                  onClick={toggleFullScreen}
-                  className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-xs font-bold transition-all shadow-sm flex items-center space-x-1.5"
+                  onClick={handleOpenAskDoubt}
+                  className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 text-xs font-bold transition-all shadow-sm flex items-center space-x-1.5"
+                  title="Ask a doubt linked to the current video timestamp"
                 >
-                  {isFullscreen ? (
-                    <>
-                      <Minimize className="w-3.5 h-3.5" />
-                      <span>Exit Full Screen</span>
-                    </>
-                  ) : (
-                    <>
-                      <Maximize className="w-3.5 h-3.5" />
-                      <span>Full Screen</span>
-                    </>
-                  )}
+                  <HelpCircle className="w-3.5 h-3.5 text-slate-950" />
+                  <span>Ask Doubt</span>
+                  <span className="bg-slate-950/20 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold">
+                    {formatTimestamp(Math.floor(videoRef.current?.currentTime || 0))}
+                  </span>
                 </button>
               </div>
             </div>
           )}
 
-          {/* Player Action Bar */}
-          <div className="bg-white rounded-3xl p-5 border border-slate-200/90 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="flex items-center space-x-3">
+          {/* Player Action Bar (Responsive Mobile/Tablet/Desktop) */}
+          <div className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200/90 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 sm:gap-4">
+            <div className="flex items-center justify-between sm:justify-start space-x-2 sm:space-x-3">
               <button
                 onClick={handlePrevLesson}
                 disabled={currentTopicIndex <= 0}
-                className="px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 transition-colors inline-flex items-center space-x-1"
+                className="flex-1 sm:flex-initial px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 transition-colors inline-flex items-center justify-center space-x-1"
               >
                 <ArrowLeft className="w-3.5 h-3.5" />
                 <span>Previous</span>
@@ -792,30 +789,39 @@ export const CoursePlayer: React.FC = () => {
               <button
                 onClick={handleNextLesson}
                 disabled={currentTopicIndex >= allTopics.length - 1}
-                className="px-3.5 py-2 rounded-xl bg-indigo-50 border border-indigo-200 text-xs font-bold text-indigo-700 hover:bg-indigo-100 disabled:opacity-40 transition-colors inline-flex items-center space-x-1"
+                className="flex-1 sm:flex-initial px-3.5 py-2 rounded-xl bg-indigo-50 border border-indigo-200 text-xs font-bold text-indigo-700 hover:bg-indigo-100 disabled:opacity-40 transition-colors inline-flex items-center justify-center space-x-1"
               >
                 <span>Next Lesson</span>
                 <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+
+              <button
+                onClick={handleOpenAskDoubt}
+                className="sm:hidden px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-300 text-xs font-bold text-amber-900 hover:bg-amber-500/20 transition-colors inline-flex items-center space-x-1"
+                title="Ask Doubt"
+              >
+                <HelpCircle className="w-3.5 h-3.5 text-amber-700" />
+                <span>Doubt</span>
               </button>
             </div>
 
             {/* Automated Completion Status - Students cannot click to mark as completed */}
             {activeTopic && (
-              <div>
+              <div className="flex justify-center sm:justify-end">
                 {activeTopic.isCompleted ? (
-                  <div className="px-4 py-2.5 rounded-xl font-bold text-xs bg-emerald-600 text-white shadow-sm inline-flex items-center space-x-2">
+                  <div className="w-full sm:w-auto text-center px-4 py-2.5 rounded-xl font-bold text-xs bg-emerald-600 text-white shadow-sm inline-flex items-center justify-center space-x-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-200" />
                     <span>Lecture Completed ✓</span>
                   </div>
                 ) : activeTopic.videoUrl ? (
-                  <div className="px-4 py-2.5 rounded-xl font-semibold text-xs bg-slate-100 text-slate-600 border border-slate-200 inline-flex items-center space-x-2">
+                  <div className="w-full sm:w-auto text-center px-4 py-2.5 rounded-xl font-semibold text-xs bg-slate-100 text-slate-600 border border-slate-200 inline-flex items-center justify-center space-x-2">
                     <Lock className="w-3.5 h-3.5 text-slate-400" />
                     <span>Watch full video to complete ({watchProgressPercent}%)</span>
                   </div>
                 ) : (
                   <button
                     onClick={() => completeCurrentTopic(activeTopic.id)}
-                    className="px-4 py-2.5 rounded-xl font-bold text-xs bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm inline-flex items-center space-x-2"
+                    className="w-full sm:w-auto text-center px-4 py-2.5 rounded-xl font-bold text-xs bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm inline-flex items-center justify-center space-x-2"
                   >
                     <CheckCircle2 className="w-4 h-4" />
                     <span>Mark Notes Read</span>
@@ -825,35 +831,49 @@ export const CoursePlayer: React.FC = () => {
             )}
           </div>
 
-          {/* Bottom Tabs: Overview & Notes VS Assignments */}
+          {/* Bottom Tabs: Overview & Notes | Ask Doubt | Course Assignments */}
           <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm overflow-hidden">
-            <div className="flex border-b border-slate-200">
+            <div className="flex border-b border-slate-200 overflow-x-auto no-scrollbar">
               <button
                 onClick={() => setActiveTab('overview')}
-                className={`flex-1 py-3.5 text-xs font-bold transition-all border-b-2 flex items-center justify-center space-x-2 ${
+                className={`flex-1 min-w-[120px] py-3.5 px-3 text-xs font-bold transition-all border-b-2 flex items-center justify-center space-x-1.5 ${
                   activeTab === 'overview'
                     ? 'border-indigo-600 text-indigo-600 bg-indigo-50/30'
                     : 'border-transparent text-slate-500 hover:text-slate-800'
                 }`}
               >
                 <FileText className="w-4 h-4" />
-                <span>Lecture Notes & Overview</span>
+                <span className="whitespace-nowrap">Notes & Overview</span>
               </button>
+
+              <button
+                id="ask-doubt-tab-btn"
+                onClick={() => setActiveTab('doubts')}
+                className={`flex-1 min-w-[130px] py-3.5 px-3 text-xs font-bold transition-all border-b-2 flex items-center justify-center space-x-1.5 ${
+                  activeTab === 'doubts'
+                    ? 'border-amber-500 text-amber-700 bg-amber-50/40'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <HelpCircle className="w-4 h-4 text-amber-600" />
+                <span className="whitespace-nowrap">Ask Doubt ({doubts.length})</span>
+              </button>
+
               <button
                 onClick={() => setActiveTab('assignments')}
-                className={`flex-1 py-3.5 text-xs font-bold transition-all border-b-2 flex items-center justify-center space-x-2 ${
+                className={`flex-1 min-w-[130px] py-3.5 px-3 text-xs font-bold transition-all border-b-2 flex items-center justify-center space-x-1.5 ${
                   activeTab === 'assignments'
                     ? 'border-indigo-600 text-indigo-600 bg-indigo-50/30'
                     : 'border-transparent text-slate-500 hover:text-slate-800'
                 }`}
               >
                 <FileCheck2 className="w-4 h-4" />
-                <span>Course Assignments ({assignments.length})</span>
+                <span className="whitespace-nowrap">Assignments ({assignments.length})</span>
               </button>
             </div>
 
-            <div className="p-6">
-              {activeTab === 'overview' ? (
+            <div className="p-4 sm:p-6">
+              {activeTab === 'overview' && (
                 <div className="space-y-4">
                   <div>
                     <h3 className="font-extrabold text-lg text-slate-900">{activeTopic?.title}</h3>
@@ -872,7 +892,194 @@ export const CoursePlayer: React.FC = () => {
                     <p className="text-xs text-slate-400 italic">No notes provided for this topic.</p>
                   )}
                 </div>
-              ) : (
+              )}
+
+              {activeTab === 'doubts' && (
+                <div className="space-y-6">
+                  {/* New Doubt Form Box */}
+                  <form
+                    onSubmit={handleCreateDoubt}
+                    className="p-4 sm:p-5 rounded-2xl border border-amber-200/80 bg-amber-50/30 space-y-3"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs font-extrabold text-slate-900">
+                          Ask a Doubt at this Lecture Timestamp:
+                        </span>
+                        <div className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white font-mono font-bold text-xs inline-flex items-center space-x-1 shadow-sm">
+                          <Clock className="w-3 h-3" />
+                          <span>{formatTimestamp(doubtTimestampSec)}</span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const cur = Math.floor(videoRef.current?.currentTime || 0);
+                          setDoubtTimestampSec(cur);
+                        }}
+                        className="text-[11px] font-semibold text-indigo-700 hover:text-indigo-900 underline flex items-center space-x-1"
+                        title="Sync with current video playback position"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>Sync Current Playback ({formatTimestamp(Math.floor(videoRef.current?.currentTime || 0))})</span>
+                      </button>
+                    </div>
+
+                    <textarea
+                      rows={3}
+                      value={doubtText}
+                      onChange={(e) => setDoubtText(e.target.value)}
+                      placeholder="Type your question or doubt here regarding what was explained at this moment in the video..."
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white leading-relaxed resize-none"
+                    />
+
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] text-slate-500">
+                        💡 Other students and instructor can see your question and timestamp.
+                      </p>
+                      <button
+                        type="submit"
+                        disabled={submittingDoubt || !doubtText.trim()}
+                        className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-bold text-xs shadow-md shadow-indigo-600/30 transition-all inline-flex items-center space-x-1.5 disabled:opacity-50"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        <span>{submittingDoubt ? 'Posting...' : 'Post Doubt'}</span>
+                      </button>
+                    </div>
+                  </form>
+
+                  {/* Doubts List */}
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                      <h4 className="font-extrabold text-sm text-slate-900 flex items-center space-x-2">
+                        <MessageSquare className="w-4 h-4 text-indigo-600" />
+                        <span>Questions for this Lecture ({doubts.length})</span>
+                      </h4>
+                      <span className="text-[11px] text-slate-400">
+                        Click any timestamp to jump video playback
+                      </span>
+                    </div>
+
+                    {doubts.length === 0 ? (
+                      <div className="text-center py-8 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                        <MessageCircleQuestion className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                        <p className="text-xs font-semibold text-slate-600">No questions asked yet for this lecture.</p>
+                        <p className="text-[11px] text-slate-400 mt-1">
+                          Have a doubt while watching? Pause and click "Ask Doubt" above!
+                        </p>
+                      </div>
+                    ) : (
+                      doubts.map((doubt) => (
+                        <div
+                          key={doubt.id}
+                          className="p-4 sm:p-5 rounded-2xl border border-slate-200 bg-white hover:border-slate-300 transition-all shadow-sm space-y-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center space-x-2">
+                              {/* Clickable Timestamp Chip that jumps video */}
+                              <button
+                                type="button"
+                                onClick={() => seekToTimestamp(doubt.timestampSec)}
+                                className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-mono font-bold text-xs inline-flex items-center space-x-1 shadow-sm transition-transform"
+                                title="Jump video playback to this exact second"
+                              >
+                                <Play className="w-3 h-3 fill-current" />
+                                <span>{formatTimestamp(doubt.timestampSec)}</span>
+                              </button>
+
+                              <span className="text-xs font-bold text-slate-800">
+                                {doubt.user?.name || 'Student'}
+                              </span>
+
+                              <span className="text-[10px] text-slate-400">
+                                {new Date(doubt.createdAt).toLocaleDateString()}
+                              </span>
+                            </div>
+
+                            {/* Resolution status */}
+                            {doubt.isResolved ? (
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center space-x-1">
+                                <Check className="w-3 h-3" />
+                                <span>Answered</span>
+                              </span>
+                            ) : (
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                                ⏳ Pending Review
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Doubt Question */}
+                          <p className="text-xs text-slate-700 leading-relaxed font-normal whitespace-pre-wrap">
+                            {doubt.question}
+                          </p>
+
+                          {/* Instructor Answer Section if replied */}
+                          {doubt.answer ? (
+                            <div className="mt-2 p-3.5 rounded-xl bg-slate-50 border border-indigo-100 space-y-1">
+                              <div className="flex items-center space-x-1.5 text-indigo-700 text-[11px] font-bold">
+                                <CornerDownRight className="w-3.5 h-3.5" />
+                                <span>Instructor / Mentor Answer:</span>
+                              </div>
+                              <p className="text-xs text-slate-800 leading-relaxed pl-5 whitespace-pre-wrap">
+                                {doubt.answer}
+                              </p>
+                            </div>
+                          ) : (
+                            /* Instructor reply form if logged in user is ADMIN */
+                            user?.role === 'ADMIN' && (
+                              <div className="mt-2 pt-2 border-t border-slate-100">
+                                {replyingDoubtId === doubt.id ? (
+                                  <div className="space-y-2">
+                                    <textarea
+                                      rows={2}
+                                      value={replyText}
+                                      onChange={(e) => setReplyText(e.target.value)}
+                                      placeholder="Write your instructor answer..."
+                                      className="w-full p-2.5 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                                    />
+                                    <div className="flex items-center space-x-2">
+                                      <button
+                                        onClick={() => handleReplyDoubt(doubt.id)}
+                                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors"
+                                      >
+                                        Submit Answer
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          setReplyingDoubtId(null);
+                                          setReplyText('');
+                                        }}
+                                        className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-bold transition-colors"
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() => {
+                                      setReplyingDoubtId(doubt.id);
+                                      setReplyText('');
+                                    }}
+                                    className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center space-x-1"
+                                  >
+                                    <CornerDownRight className="w-3 h-3" />
+                                    <span>Reply as Instructor</span>
+                                  </button>
+                                )}
+                              </div>
+                            )
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'assignments' && (
                 /* Assignments Solver Section */
                 <div className="space-y-6">
                   {assignments.length === 0 ? (

@@ -1,4 +1,4 @@
-import { Course, MyCourseItem } from '../types';
+import { Course, MyCourseItem, Doubt } from '../types';
 import { curriculumService } from './curriculumService';
 
 const CACHE_PREFIX = 'dg_cache_';
@@ -6,6 +6,22 @@ const PROGRESS_QUEUE_KEY = 'dg_offline_progress_queue';
 const ENROLLED_COURSES_KEY = `${CACHE_PREFIX}enrolled_courses`;
 
 export const offlineCache = {
+  // Save doubts cache
+  saveTopicDoubts: (topicId: string, doubts: Doubt[]) => {
+    try {
+      localStorage.setItem(`${CACHE_PREFIX}doubts_${topicId}`, JSON.stringify(doubts));
+    } catch {}
+  },
+
+  getTopicDoubts: (topicId: string): Doubt[] | null => {
+    try {
+      const item = localStorage.getItem(`${CACHE_PREFIX}doubts_${topicId}`);
+      return item ? JSON.parse(item) : null;
+    } catch {
+      return null;
+    }
+  },
+
   // Save course data to local cache
   saveCourse: (slug: string, data: Course) => {
     try {

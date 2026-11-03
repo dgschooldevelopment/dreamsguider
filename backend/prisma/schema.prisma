@@ -25,6 +25,7 @@ model User {
   progress     TopicProgress[]
   submissions  AssignmentSubmission[]
   notifications Notification[]
+  doubts       Doubt[]
 }
 
 model Course {
@@ -75,6 +76,7 @@ model Topic {
   module      Module          @relation(fields: [moduleId], references: [id], onDelete: Cascade)
   progress    TopicProgress[]
   assignments Assignment[]
+  doubts      Doubt[]
 }
 
 model Enrollment {
@@ -151,4 +153,19 @@ model Notification {
   createdAt DateTime @default(now())
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Doubt {
+  id           String    @id @default(uuid())
+  topicId      String
+  userId       String
+  timestampSec Int       @default(0)
+  question     String
+  answer       String?
+  isResolved   Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  topic        Topic     @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

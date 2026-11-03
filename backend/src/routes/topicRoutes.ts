@@ -7,6 +7,9 @@ import {
   updateTopic,
   deleteTopic,
   updateTopicProgress,
+  createTopicDoubt,
+  getTopicDoubts,
+  replyToDoubt,
 } from '../controllers/topicController';
 import { authenticateToken, requireRole } from '../middleware/auth';
 import { uploadVideo } from '../middleware/upload';
@@ -25,5 +28,10 @@ router.delete('/topics/:id', authenticateToken, requireRole('ADMIN'), deleteTopi
 
 // Student progress route
 router.post('/topics/:topicId/progress', authenticateToken, updateTopicProgress);
+
+// Timestamped Doubts / Q&A routes
+router.post('/topics/:topicId/doubts', authenticateToken, createTopicDoubt);
+router.get('/topics/:topicId/doubts', authenticateToken, getTopicDoubts);
+router.put('/topics/doubts/:doubtId/reply', authenticateToken, replyToDoubt);
 
 export default router;
