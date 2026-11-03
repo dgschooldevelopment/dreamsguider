@@ -6,6 +6,7 @@ import { AuthRequest } from '../middleware/auth';
 
 export const register = async (req: Request, res: Response): Promise<void> => {
   try {
+    // Only allow registration if explicitly configured or through admin
     const { name, email, password, phone, role } = req.body;
 
     if (!name || !email || !password) {
@@ -23,7 +24,6 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    // Allow setting role to ADMIN if requested and validated, default to STUDENT
     const assignedRole = role === 'ADMIN' ? 'ADMIN' : 'STUDENT';
 
     const user = await prisma.user.create({
@@ -68,7 +68,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
 
 export const login = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email, password } = req.body;
+    const { email, password, requiredRole } = req.body;
 
     if (!email || !password) {
       res.status(400).json({ success: false, message: 'Email and password are required.' });
@@ -87,6 +87,17 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       res.status(401).json({ success: false, message: 'Invalid email or password.' });
+      return;
+    }
+
+    // If login requested from specific portal (e.g. Admin portal only allows ADMIN)
+    if (requiredRole && user.role !== requiredRole) {
+      res.status(403).json({
+        success: false,
+        message: requiredRole === 'ADMIN'
+          ? 'Access denied. This portal is for instructors and admins only.'
+          : 'Access denied.',
+      });
       return;
     }
 
@@ -192,5 +203,68 @@ export const getAllUsers = async (req: AuthRequest, res: Response): Promise<void
   } catch (error: any) {
     console.error('Get users error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch users.' });
+  }
+};
+
+// Admin adds student directly
+export const createStudentByAdmin = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { name, email, password, phone, courseIds } = req.body;
+
+    if (!name || !email || !password) {
+      res.status(400).json({ success: false, message: 'Student name, email, and initial password are required.' });
+      return;
+    }
+
+    const existingUser = await prisma.user.findUnique({
+      where: { email: email.toLowerCase().trim() },
+    });
+
+    if (existingUser) {
+      res.status(409).json({ success: false, message: 'A user with this email address already exists.' });
+      return;
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const student = await prisma.user.create({
+      data: {
+        name: name.trim(),
+        email: email.toLowerCase().trim(),
+        password: hashedPassword,
+        phone: phone?.trim() || null,
+        role: 'STUDENT',
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        phone: true,
+        createdAt: true,
+      },
+    });
+
+    // Optionally allocate courses directly
+    if (Array.isArray(courseIds) && courseIds.length > 0) {
+      for (const courseId of courseIds) {
+        await prisma.enrollment.create({
+          data: {
+            userId: student.id,
+            courseId,
+            status: 'ACTIVE',
+          },
+        });
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      message: `Student "${student.name}" created and enrolled successfully.`,
+      data: student,
+    });
+  } catch (error: any) {
+    console.error('Create student error:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to add student.' });
   }
 };

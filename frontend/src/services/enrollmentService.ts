@@ -31,4 +31,16 @@ export const enrollmentService = {
     const res = await api.get('/auth/users');
     return res.data.data;
   },
+
+  // Admin: Create / Add student directly
+  createStudent: async (data: {
+    name: string;
+    email: string;
+    password: string;
+    phone?: string;
+    courseIds?: string[];
+  }): Promise<any> => {
+    const res = await api.post('/auth/users/create', data);
+    return res.data;
+  },
 };

@@ -6,7 +6,7 @@ import { AppLayout } from './components/layout/AppLayout';
 
 // Auth Pages
 import { Login } from './pages/auth/Login';
-import { Register } from './pages/auth/Register';
+import { AdminLogin } from './pages/auth/AdminLogin';
 
 // Admin Pages
 import { AdminDashboard } from './pages/admin/AdminDashboard';
@@ -26,7 +26,7 @@ export const App: React.FC = () => {
 
   return (
     <Routes>
-      {/* Public Auth Routes */}
+      {/* Student Portal Login */}
       <Route
         path="/login"
         element={
@@ -37,16 +37,21 @@ export const App: React.FC = () => {
           )
         }
       />
+
+      {/* Admin Portal Login (Only when /admin/login is opened) */}
       <Route
-        path="/register"
+        path="/admin/login"
         element={
           isAuthenticated ? (
             <Navigate to={isAdmin ? '/admin' : '/dashboard'} replace />
           ) : (
-            <Register />
+            <AdminLogin />
           )
         }
       />
+
+      {/* Disallow public registration - redirect to login */}
+      <Route path="/register" element={<Navigate to="/login" replace />} />
 
       {/* Protected Admin Routes */}
       <Route element={<ProtectedRoute requireAdmin={true} />}>
