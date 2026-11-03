@@ -47,11 +47,12 @@ export const CoursePlayer: React.FC = () => {
   const [pendingSyncCount, setPendingSyncCount] = useState(offlineCache.getPendingProgressCount());
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
-  // Video Streaming & Buffer Management States
-  const [bufferedSeconds, setBufferedSeconds] = useState<number>(0);
-  const [bufferedPercent, setBufferedPercent] = useState<number>(0);
+  // Video Streaming, Gestures & Watch States
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
   const [isBuffering, setIsBuffering] = useState<boolean>(false);
+  const [watchProgressPercent, setWatchProgressPercent] = useState<number>(0);
+  const [doubleTapFeedback, setDoubleTapFeedback] = useState<'left' | 'right' | null>(null);
+  const [completionCelebration, setCompletionCelebration] = useState<string | null>(null);
 
   // Accordion state: map moduleId -> boolean
   const [openModules, setOpenModules] = useState<Record<string, boolean>>({});
@@ -63,6 +64,9 @@ export const CoursePlayer: React.FC = () => {
   const [submittingAssignmentId, setSubmittingAssignmentId] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const clickTimeoutRef = useRef<any>(null);
+  const lastLeftTapRef = useRef<number>(0);
+  const lastRightTapRef = useRef<number>(0);
 
   // Monitor network connectivity & auto-sync progress when reconnected
   useEffect(() => {
@@ -177,13 +181,18 @@ export const CoursePlayer: React.FC = () => {
   const handleSelectTopic = (topic: Topic) => {
     if (topic.isLocked) return;
     setActiveTopic(topic);
-    setBufferedSeconds(0);
-    setBufferedPercent(0);
+    setWatchProgressPercent(0);
+    setDoubleTapFeedback(null);
     setSearchParams({ topicId: topic.id });
   };
 
-  const handleToggleCompletion = async (topicId: string, currentStatus: boolean) => {
-    const newStatus = !currentStatus;
+  // Automated completion: ONLY triggers when student completely watches the video
+  const completeCurrentTopic = async (topicId?: string) => {
+    const targetTopicId = topicId || activeTopic?.id;
+    if (!targetTopicId) return;
+
+    // Check if already completed to avoid duplicate requests
+    if (activeTopic?.id === targetTopicId && activeTopic.isCompleted) return;
 
     // Optimistically update local course state
     setCourse((prev) => {
@@ -192,7 +201,7 @@ export const CoursePlayer: React.FC = () => {
         ...prev,
         modules: prev.modules?.map((m) => ({
           ...m,
-          topics: m.topics.map((t) => (t.id === topicId ? { ...t, isCompleted: newStatus } : t)),
+          topics: m.topics.map((t) => (t.id === targetTopicId ? { ...t, isCompleted: true } : t)),
         })),
       };
       if (slug) {
@@ -201,20 +210,23 @@ export const CoursePlayer: React.FC = () => {
       return updated;
     });
 
-    if (activeTopic?.id === topicId) {
-      setActiveTopic((prev) => (prev ? { ...prev, isCompleted: newStatus } : prev));
+    if (activeTopic?.id === targetTopicId) {
+      setActiveTopic((prev) => (prev ? { ...prev, isCompleted: true } : prev));
     }
+
+    setCompletionCelebration('🎉 Congratulations! You completed this lecture.');
+    setTimeout(() => setCompletionCelebration(null), 5000);
 
     // If offline or network fails, queue to local storage
     if (!navigator.onLine) {
-      offlineCache.queueProgress(topicId, newStatus);
+      offlineCache.queueProgress(targetTopicId, true);
       setPendingSyncCount(offlineCache.getPendingProgressCount());
     } else {
       try {
-        await curriculumService.updateProgress(topicId, { isCompleted: newStatus });
+        await curriculumService.updateProgress(targetTopicId, { isCompleted: true });
       } catch (err) {
         console.warn('Online sync failed, queuing for offline retry', err);
-        offlineCache.queueProgress(topicId, newStatus);
+        offlineCache.queueProgress(targetTopicId, true);
         setPendingSyncCount(offlineCache.getPendingProgressCount());
       }
     }
@@ -227,7 +239,7 @@ export const CoursePlayer: React.FC = () => {
     setTimeout(() => setSyncMessage(null), 4000);
   };
 
-  // Video Streaming, Buffering & Resuming handlers
+  // Video Streaming, Resuming & Progress Handlers
   const handleVideoLoadedMetadata = () => {
     if (activeTopic && videoRef.current) {
       const savedTime = offlineCache.getVideoTime(activeTopic.id);
@@ -239,25 +251,26 @@ export const CoursePlayer: React.FC = () => {
   };
 
   const handleVideoTimeUpdate = () => {
-    if (activeTopic && videoRef.current) {
-      offlineCache.saveVideoTime(activeTopic.id, videoRef.current.currentTime);
+    const video = videoRef.current;
+    if (!video || !activeTopic) return;
+
+    offlineCache.saveVideoTime(activeTopic.id, video.currentTime);
+
+    if (video.duration > 0) {
+      const pct = Math.min(100, Math.round((video.currentTime / video.duration) * 100));
+      setWatchProgressPercent(pct);
+
+      // Only mark completed when completely watched:
+      // reached 98% or within 2 seconds of the end
+      if (!activeTopic.isCompleted && (pct >= 98 || video.duration - video.currentTime <= 2)) {
+        completeCurrentTopic(activeTopic.id);
+      }
     }
   };
 
-  const handleVideoProgress = () => {
-    const video = videoRef.current;
-    if (!video || !video.duration) return;
-    const buffered = video.buffered;
-    if (buffered.length > 0) {
-      for (let i = 0; i < buffered.length; i++) {
-        if (buffered.start(i) <= video.currentTime && video.currentTime <= buffered.end(i)) {
-          const percent = Math.min(100, Math.round((buffered.end(i) / video.duration) * 100));
-          const ahead = Math.max(0, Math.round(buffered.end(i) - video.currentTime));
-          setBufferedPercent(percent);
-          setBufferedSeconds(ahead);
-          break;
-        }
-      }
+  const handleVideoEnded = () => {
+    if (activeTopic && !activeTopic.isCompleted) {
+      completeCurrentTopic(activeTopic.id);
     }
   };
 
@@ -270,6 +283,53 @@ export const CoursePlayer: React.FC = () => {
     }
   };
 
+  // Double-tap and double-click skip handling (-10s / +10s)
+  const triggerSkip = (seconds: number, side: 'left' | 'right') => {
+    skipTime(seconds);
+    setDoubleTapFeedback(side);
+    setTimeout(() => {
+      setDoubleTapFeedback((prev) => (prev === side ? null : prev));
+    }, 650);
+  };
+
+  // Handles desktop single-click (toggle play/pause) vs double-click (skip 10s)
+  const handleSideClick = (side: 'left' | 'right', seconds: number) => {
+    if (clickTimeoutRef.current) {
+      clearTimeout(clickTimeoutRef.current);
+      clickTimeoutRef.current = null;
+      triggerSkip(seconds, side);
+    } else {
+      clickTimeoutRef.current = setTimeout(() => {
+        clickTimeoutRef.current = null;
+        if (videoRef.current) {
+          if (videoRef.current.paused) videoRef.current.play().catch(() => {});
+          else videoRef.current.pause();
+        }
+      }, 240);
+    }
+  };
+
+  // Touch handlers for mobile double-tap
+  const handleLeftTouch = () => {
+    const now = Date.now();
+    if (now - lastLeftTapRef.current < 350) {
+      triggerSkip(-10, 'left');
+      lastLeftTapRef.current = 0;
+    } else {
+      lastLeftTapRef.current = now;
+    }
+  };
+
+  const handleRightTouch = () => {
+    const now = Date.now();
+    if (now - lastRightTapRef.current < 350) {
+      triggerSkip(10, 'right');
+      lastRightTapRef.current = 0;
+    } else {
+      lastRightTapRef.current = now;
+    }
+  };
+
   const changePlaybackSpeed = (speed: number) => {
     setPlaybackSpeed(speed);
     if (videoRef.current) {
@@ -277,11 +337,8 @@ export const CoursePlayer: React.FC = () => {
     }
   };
 
-  const handleNextLesson = async () => {
+  const handleNextLesson = () => {
     if (!activeTopic) return;
-    if (!activeTopic.isCompleted) {
-      await handleToggleCompletion(activeTopic.id, false);
-    }
     if (currentTopicIndex < allTopics.length - 1) {
       const nextTopic = allTopics[currentTopicIndex + 1];
       handleSelectTopic(nextTopic);
@@ -370,6 +427,22 @@ export const CoursePlayer: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Lecture Completion Celebration Toast */}
+      {completionCelebration && (
+        <div className="bg-emerald-600 text-white rounded-2xl p-4 flex items-center justify-between shadow-lg animate-in slide-in-from-top duration-300">
+          <div className="flex items-center space-x-3">
+            <Sparkles className="w-5 h-5 text-amber-300 shrink-0" />
+            <div>
+              <p className="text-xs font-bold">{completionCelebration}</p>
+              <p className="text-[11px] text-emerald-100">
+                You have finished watching this lecture. Your progress has been updated!
+              </p>
+            </div>
+          </div>
+          <CheckCircle2 className="w-5 h-5 text-emerald-200 shrink-0" />
+        </div>
+      )}
+
       {/* Offline Mode Alert Banner */}
       {!isOnline && (
         <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-900 shadow-sm animate-pulse">
@@ -458,8 +531,11 @@ export const CoursePlayer: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column: Video Player & Tabs (Span 2) */}
         <div className="lg:col-span-2 space-y-4">
-          {/* Video Container */}
-          <div className="bg-black rounded-3xl overflow-hidden aspect-video shadow-2xl relative border border-slate-800 flex items-center justify-center">
+          {/* Video Container with Double-Tap Gestures & Download Protection */}
+          <div
+            className="bg-black rounded-3xl overflow-hidden aspect-video shadow-2xl relative border border-slate-800 flex items-center justify-center select-none"
+            onContextMenu={(e) => e.preventDefault()}
+          >
             {activeTopic?.isLocked ? (
               <div className="text-center p-8 text-white">
                 <Lock className="w-12 h-12 text-amber-400 mx-auto mb-2" />
@@ -490,27 +566,66 @@ export const CoursePlayer: React.FC = () => {
                   ref={videoRef}
                   src={offlineCache.optimizeVideoUrl(activeTopic.videoUrl)}
                   controls
+                  controlsList="nodownload noplaybackrate"
+                  disablePictureInPicture
+                  disableRemotePlayback
+                  onContextMenu={(e) => e.preventDefault()}
                   autoPlay
                   preload="auto"
                   playsInline
                   onLoadedMetadata={handleVideoLoadedMetadata}
                   onTimeUpdate={handleVideoTimeUpdate}
-                  onProgress={handleVideoProgress}
+                  onEnded={handleVideoEnded}
                   onWaiting={() => setIsBuffering(true)}
                   onPlaying={() => setIsBuffering(false)}
-                  className="w-full h-full object-contain"
+                  className="w-full h-full object-contain pointer-events-auto select-none"
                 />
+
+                {/* Invisible Double-Tap / Double-Click Gesture Touch Zones (Leaves bottom 56px open for video controls) */}
+                <div className="absolute inset-x-0 top-0 bottom-14 flex z-10 pointer-events-auto">
+                  {/* Left 50% Zone: Double-Click / Double-Tap -> -10s */}
+                  <div
+                    onClick={() => handleSideClick('left', -10)}
+                    onTouchStart={handleLeftTouch}
+                    className="w-1/2 h-full relative flex items-center justify-center cursor-pointer select-none"
+                    title="Double-tap to rewind 10s"
+                  >
+                    {doubleTapFeedback === 'left' && (
+                      <div className="flex flex-col items-center justify-center w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-black/75 backdrop-blur-md text-white border border-white/20 shadow-2xl animate-pulse pointer-events-none">
+                        <RotateCcw className="w-7 h-7 sm:w-8 sm:h-8 text-white" />
+                        <span className="text-xs font-black mt-1 tracking-wider">-10s</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right 50% Zone: Double-Click / Double-Tap -> +10s */}
+                  <div
+                    onClick={() => handleSideClick('right', 10)}
+                    onTouchStart={handleRightTouch}
+                    className="w-1/2 h-full relative flex items-center justify-center cursor-pointer select-none"
+                    title="Double-tap to forward 10s"
+                  >
+                    {doubleTapFeedback === 'right' && (
+                      <div className="flex flex-col items-center justify-center w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-black/75 backdrop-blur-md text-white border border-white/20 shadow-2xl animate-pulse pointer-events-none">
+                        <RotateCw className="w-7 h-7 sm:w-8 sm:h-8 text-white" />
+                        <span className="text-xs font-black mt-1 tracking-wider">+10s</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Buffering stream indicator */}
                 {isBuffering && (
-                  <div className="absolute top-4 right-4 bg-black/75 backdrop-blur-md px-3 py-1.5 rounded-full text-[11px] text-white flex items-center space-x-2 pointer-events-none border border-white/10 shadow-lg">
+                  <div className="absolute top-4 right-4 bg-black/75 backdrop-blur-md px-3 py-1.5 rounded-full text-[11px] text-white flex items-center space-x-2 pointer-events-none border border-white/10 shadow-lg z-20">
                     <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-400" />
-                    <span>Buffering stream...</span>
+                    <span>Loading...</span>
                   </div>
                 )}
               </>
             )}
           </div>
 
-          {/* Smart Video Streaming & Buffer Bar for direct/Cloudinary videos */}
+          {/* Clean Player Toolbar (Skip 10s & Speed controls - Buffer details completely removed) */}
           {!isYouTubeUrl(activeTopic?.videoUrl) && activeTopic?.videoUrl && (
             <div className="bg-slate-900 text-white rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-sm border border-slate-800">
               <div className="flex items-center space-x-3">
@@ -553,21 +668,9 @@ export const CoursePlayer: React.FC = () => {
                 </div>
               </div>
 
-              {/* Buffer Health Indicator */}
-              <div className="flex items-center space-x-3 text-xs">
-                <div className="flex items-center space-x-1.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  <span className="text-[11px] text-slate-300 font-medium">
-                    Buffer: {bufferedSeconds > 0 ? `${bufferedSeconds}s ahead` : 'Ready'}
-                  </span>
-                </div>
-                <div className="w-24 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-emerald-500 rounded-full transition-all duration-300"
-                    style={{ width: `${bufferedPercent}%` }}
-                  />
-                </div>
-                <span className="text-[10px] text-slate-400 font-bold">{bufferedPercent}% cached</span>
+              {/* Gesture Hint (Zero buffer stats shown) */}
+              <div className="text-[11px] text-slate-400 flex items-center space-x-1.5">
+                <span>💡 Double-tap video sides to skip 10s</span>
               </div>
             </div>
           )}
@@ -594,19 +697,29 @@ export const CoursePlayer: React.FC = () => {
               </button>
             </div>
 
-            {/* Mark as Completed Toggle */}
+            {/* Automated Completion Status - Students cannot click to mark as completed */}
             {activeTopic && (
-              <button
-                onClick={() => handleToggleCompletion(activeTopic.id, !!activeTopic.isCompleted)}
-                className={`px-4 py-2.5 rounded-xl font-bold text-xs shadow-sm transition-all inline-flex items-center space-x-2 ${
-                  activeTopic.isCompleted
-                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                    : 'bg-indigo-600 hover:bg-indigo-700 text-white'
-                }`}
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                <span>{activeTopic.isCompleted ? 'Completed ✓' : 'Mark as Completed'}</span>
-              </button>
+              <div>
+                {activeTopic.isCompleted ? (
+                  <div className="px-4 py-2.5 rounded-xl font-bold text-xs bg-emerald-600 text-white shadow-sm inline-flex items-center space-x-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-200" />
+                    <span>Lecture Completed ✓</span>
+                  </div>
+                ) : activeTopic.videoUrl ? (
+                  <div className="px-4 py-2.5 rounded-xl font-semibold text-xs bg-slate-100 text-slate-600 border border-slate-200 inline-flex items-center space-x-2">
+                    <Lock className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Watch full video to complete ({watchProgressPercent}%)</span>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => completeCurrentTopic(activeTopic.id)}
+                    className="px-4 py-2.5 rounded-xl font-bold text-xs bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm inline-flex items-center space-x-2"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Mark Notes Read</span>
+                  </button>
+                )}
+              </div>
             )}
           </div>
 
@@ -832,20 +945,21 @@ export const CoursePlayer: React.FC = () => {
                                   : 'hover:bg-slate-50'
                               }`}
                             >
-                              {/* Completion checkbox button */}
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleToggleCompletion(topic.id, !!topic.isCompleted);
-                                }}
+                              {/* Topic completion indicator (read-only: students cannot click to cheat completion) */}
+                              <div
                                 className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${
                                   topic.isCompleted
-                                    ? 'bg-emerald-500 border-emerald-500 text-white'
-                                    : 'border-slate-300 hover:border-indigo-500'
+                                    ? 'bg-emerald-500 border-emerald-500 text-white shadow-sm'
+                                    : 'border-slate-300 bg-white'
                                 }`}
+                                title={topic.isCompleted ? 'Lecture Completed' : 'Watch video completely to complete'}
                               >
-                                {topic.isCompleted && <Check className="w-3 h-3 stroke-[3]" />}
-                              </button>
+                                {topic.isCompleted ? (
+                                  <Check className="w-3 h-3 stroke-[3]" />
+                                ) : (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                                )}
+                              </div>
 
                               <div className="flex-1 min-w-0">
                                 <p
