@@ -7,17 +7,13 @@ import {
   createStudentByAdmin,
   updateStudentByAdmin,
   deleteStudentByAdmin,
-  sendOtp,
-  verifyOtp,
 } from '../controllers/authController';
 import { authenticateToken, requireRole } from '../middleware/auth';
 
 const router = Router();
 
-// Student / User login
+// Student / User login (Password-based)
 router.post('/login', login);
-router.post('/send-otp', sendOtp);
-router.post('/verify-otp', verifyOtp);
 router.post('/register', register);
 router.get('/me', authenticateToken, getMe);
 

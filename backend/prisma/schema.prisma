@@ -169,13 +169,3 @@ model Doubt {
   topic        Topic     @relation(fields: [topicId], references: [id], onDelete: Cascade)
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
-
-model OtpToken {
-  id        String   @id @default(uuid())
-  email     String
-  otp       String
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-
-  @@index([email])
-}

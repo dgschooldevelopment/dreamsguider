@@ -3,7 +3,6 @@ import bcrypt from 'bcryptjs';
 import prisma from '../config/prisma';
 import { generateToken } from '../config/jwt';
 import { AuthRequest } from '../middleware/auth';
-import { sendOtpEmail } from '../services/emailService';
 
 export const register = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -387,11 +386,6 @@ export const deleteStudentByAdmin = async (req: AuthRequest, res: Response): Pro
       return;
     }
 
-    // Clean up any pending OTP tokens for this user's email
-    await prisma.otpToken.deleteMany({
-      where: { email: targetUser.email },
-    });
-
     // Delete user (cascade deletes enrollments, topicProgress, submissions, notifications, doubts)
     await prisma.user.delete({
       where: { id: userId },
@@ -404,141 +398,5 @@ export const deleteStudentByAdmin = async (req: AuthRequest, res: Response): Pro
   } catch (error: any) {
     console.error('Delete student error:', error);
     res.status(500).json({ success: false, message: error.message || 'Failed to delete student.' });
-  }
-};
-
-export const sendOtp = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { email } = req.body;
-    if (!email || typeof email !== 'string') {
-      res.status(400).json({ success: false, message: 'ईमेल आयडी आवश्यक आहे. (Email is required.)' });
-      return;
-    }
-
-    const cleanEmail = email.toLowerCase().trim();
-
-    // Verify if user exists in the system
-    const user = await prisma.user.findUnique({
-      where: { email: cleanEmail },
-    });
-
-    if (!user) {
-      res.status(404).json({
-        success: false,
-        message: 'या ईमेलने कोणतेही खाते सापडले नाही. कृपया ॲडमिनशी संपर्क साधा. (No student account found with this email. Please contact your administrator to get enrolled.)',
-      });
-      return;
-    }
-
-    // Generate random 6-digit numeric OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-    // Delete existing OTP tokens for this email
-    await prisma.otpToken.deleteMany({
-      where: { email: cleanEmail },
-    });
-
-    // Create new OTP token
-    await prisma.otpToken.create({
-      data: {
-        email: cleanEmail,
-        otp,
-        expiresAt,
-      },
-    });
-
-    // Send email via email service
-    const emailResult = await sendOtpEmail(cleanEmail, otp, user.name);
-
-    res.status(200).json({
-      success: true,
-      message: 'तुमच्या ईमेलवर ६ अंकी OTP पाठवला आहे. (A 6-digit OTP has been sent to your email.)',
-      data: {
-        email: cleanEmail,
-        devOtp: emailResult.devOtp,
-      },
-    });
-  } catch (error: any) {
-    console.error('Send OTP error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'OTP पाठवताना त्रुटी आली. कृपया पुन्हा प्रयत्न करा.',
-    });
-  }
-};
-
-export const verifyOtp = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { email, otp } = req.body;
-    if (!email || !otp) {
-      res.status(400).json({ success: false, message: 'Email and 6-digit OTP are required.' });
-      return;
-    }
-
-    const cleanEmail = email.toLowerCase().trim();
-    const cleanOtp = otp.toString().trim();
-
-    // Find latest OTP token for this email
-    const record = await prisma.otpToken.findFirst({
-      where: { email: cleanEmail },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    if (!record || record.otp !== cleanOtp) {
-      res.status(400).json({
-        success: false,
-        message: 'अवैध किंवा चुकीचा OTP. कृपया पुन्हा तपासा. (Invalid OTP. Please check and try again.)',
-      });
-      return;
-    }
-
-    if (new Date() > record.expiresAt) {
-      await prisma.otpToken.deleteMany({ where: { email: cleanEmail } });
-      res.status(400).json({
-        success: false,
-        message: 'हा OTP कालबाह्य (expired) झाला आहे. कृपया नवीन OTP मागवा. (OTP has expired. Please request a new one.)',
-      });
-      return;
-    }
-
-    // OTP verified! Delete all OTPs for this email
-    await prisma.otpToken.deleteMany({ where: { email: cleanEmail } });
-
-    // Fetch user details
-    const user = await prisma.user.findUnique({
-      where: { email: cleanEmail },
-    });
-
-    if (!user) {
-      res.status(404).json({ success: false, message: 'User not found.' });
-      return;
-    }
-
-    const token = generateToken({
-      userId: user.id,
-      email: user.email,
-      role: user.role as 'ADMIN' | 'STUDENT',
-      name: user.name,
-    });
-
-    res.status(200).json({
-      success: true,
-      message: 'लॉगिन यशस्वी झाले. (Logged in successfully.)',
-      data: {
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          phone: user.phone,
-          avatar: user.avatar,
-        },
-        token,
-      },
-    });
-  } catch (error: any) {
-    console.error('Verify OTP error:', error);
-    res.status(500).json({ success: false, message: 'OTP पडताळणी अयशस्वी झाली.' });
   }
 };
